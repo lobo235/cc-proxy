@@ -114,7 +114,8 @@ Important config:
 - `PORT` / `port`: listen port, default `18765`.
 - `CCP_ALIAS_PROVIDER` / `aliasProvider`: `codex` or `kimi`, default `codex`.
 - `CCP_LOG_STDERR` / `log.stderr`: mirror logs to stderr when set.
-- `CCP_LOG_VERBOSE` / `log.verbose`: log request bodies and detailed SSE events.
+- `CCP_LOG_VERBOSE` / `log.verbose`: log redacted request-shape and
+  translation summaries for contract debugging.
 - `CCP_CODEX_MODEL` / `codex.model`: force all Codex requests to one model.
 - `CCP_CODEX_EFFORT` / `codex.effort`: force Codex reasoning effort.
   Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
