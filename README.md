@@ -13,13 +13,19 @@ attribution and MIT license compliance. See [NOTICE](NOTICE).
 
 ## Current Status
 
-Early scaffold. Implemented so far:
+Early public implementation. Implemented so far:
 
-- CLI skeleton with `serve`, `--version`, and provider auth command shape.
+- CLI with `serve`, `--version`, `auth status`, and `auth logout`.
 - Config loading from env and `config.json`.
 - Model/provider routing rules.
-- HTTP routes for `/healthz`, `/v1/messages`, and `/v1/messages/count_tokens`.
-- Provider interface and not-yet-implemented Codex/Kimi provider stubs.
+- HTTP routes for `/healthz`, `/status`, `/v1/messages`, and
+  `/v1/messages/count_tokens`.
+- Provider auth file storage compatible with the upstream Linux paths.
+- Codex request translation for text, system prompts, tools, tool calls, and
+  tool results.
+- Codex `/v1/messages/count_tokens` support with a local estimate.
+- Initial Codex text-stream translation path for `/v1/messages`.
+- Kimi routes and richer Codex streaming behavior are still in progress.
 - Behavior spec in [docs/behavior-spec.md](docs/behavior-spec.md).
 
 ## Development
@@ -29,6 +35,7 @@ make test
 make build
 bin/cc-proxy --version
 bin/cc-proxy serve
+curl http://127.0.0.1:18765/status
 ```
 
 Default listen address is `127.0.0.1:18765`.

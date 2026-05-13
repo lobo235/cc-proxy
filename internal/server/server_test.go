@@ -29,6 +29,48 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestStatusReportsVersionRoutesAndProviderCapabilities(t *testing.T) {
+	s := New(config.Config{Port: 18765, AliasProvider: config.AliasProviderCodex}, testProviders(), nil)
+	s.SetVersion("v-test")
+	req := httptest.NewRequest(http.MethodGet, "/status", nil)
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		OK        bool `json:"ok"`
+		Version   string
+		Routes    []string
+		Providers map[string]struct {
+			Messages    string   `json:"messages"`
+			CountTokens string   `json:"count_tokens"`
+			Auth        string   `json:"auth"`
+			Models      []string `json:"models"`
+		} `json:"providers"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.OK || body.Version != "v-test" {
+		t.Fatalf("body = %+v", body)
+	}
+	if !containsString(body.Routes, "/v1/messages") || !containsString(body.Routes, "/v1/messages/count_tokens") {
+		t.Fatalf("routes = %+v", body.Routes)
+	}
+	codex := body.Providers["codex"]
+	if codex.Messages != "partial" || codex.CountTokens != "ready" || codex.Auth != "status_logout" {
+		t.Fatalf("codex = %+v", codex)
+	}
+	if !containsString(codex.Models, "gpt-5.4") {
+		t.Fatalf("codex models = %+v", codex.Models)
+	}
+	kimi := body.Providers["kimi"]
+	if kimi.Messages != "not_implemented" || kimi.CountTokens != "not_implemented" || kimi.Auth != "status_logout" {
+		t.Fatalf("kimi = %+v", kimi)
+	}
+}
+
 func TestUnknownModelReturns400(t *testing.T) {
 	s := New(config.Config{Port: 18765, AliasProvider: config.AliasProviderCodex}, testProviders(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"wat","messages":[]}`))
@@ -40,6 +82,15 @@ func TestUnknownModelReturns400(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), "Unknown model") {
 		t.Fatalf("body = %s", rec.Body.String())
 	}
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCountTokensRoutesToProvider(t *testing.T) {

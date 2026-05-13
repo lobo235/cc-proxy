@@ -64,6 +64,7 @@ func serve() error {
 		}},
 		Kimi: provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)
+	s.SetVersion(version)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	fmt.Printf("Proxy listening on http://localhost:%d\n", cfg.Port)

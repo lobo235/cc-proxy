@@ -33,6 +33,7 @@ type Server struct {
 	log      *slog.Logger
 	provider Providers
 	sessions map[string]*sessionState
+	version  string
 }
 
 type sessionState struct {
@@ -51,12 +52,21 @@ func New(cfg config.Config, providers Providers, log *slog.Logger) *Server {
 		log:      log,
 		provider: providers,
 		sessions: make(map[string]*sessionState),
+		version:  "dev",
 	}
+}
+
+func (s *Server) SetVersion(version string) {
+	if version == "" {
+		version = "dev"
+	}
+	s.version = version
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.handleCountTokens)
 	return withNotFound(mux)
@@ -100,6 +110,54 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusNotFound, "not_found", fmt.Sprintf("No route for %s %s", r.Method, r.URL.Path))
+		return
+	}
+	writeJSON(w, http.StatusOK, statusResponse{
+		OK:      true,
+		Version: s.version,
+		Routes:  []string{"/healthz", "/status", "/v1/messages", "/v1/messages/count_tokens"},
+		Providers: map[string]providerStatus{
+			"codex": {
+				Messages:    "partial",
+				CountTokens: "ready",
+				Auth:        "status_logout",
+				Models:      appendCodexModels(),
+			},
+			"kimi": {
+				Messages:    "not_implemented",
+				CountTokens: "not_implemented",
+				Auth:        "status_logout",
+				Models:      append([]string{}, modelregistry.KimiModels...),
+			},
+		},
+	})
+}
+
+type statusResponse struct {
+	OK        bool                      `json:"ok"`
+	Version   string                    `json:"version"`
+	Routes    []string                  `json:"routes"`
+	Providers map[string]providerStatus `json:"providers"`
+}
+
+type providerStatus struct {
+	Messages    string   `json:"messages"`
+	CountTokens string   `json:"count_tokens"`
+	Auth        string   `json:"auth"`
+	Models      []string `json:"models"`
+}
+
+func appendCodexModels() []string {
+	models := append([]string{}, modelregistry.CodexModels...)
+	for _, model := range modelregistry.CodexModels {
+		models = append(models, model+"-fast")
+	}
+	return models
 }
 
 func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
