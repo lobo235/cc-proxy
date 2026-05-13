@@ -65,11 +65,20 @@ its UI.
 
 For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
 needed and then forwards all arguments to `claude`. It defaults to
-`--model gpt-5.5` unless you pass your own `--model`.
+`--model gpt-5.5[1m]` unless you pass your own `--model`. The `[1m]` suffix is
+accepted by Claude Code and tells it to use a 1M-token context window for
+compaction decisions; the proxy strips that suffix before sending the model to
+Codex.
 
 `scripts/claude-gpt` preserves the normal Claude Code harness by default, so
 your configured MCP servers, skills, agents, core slash commands, project
 memory, and default tools are available.
+
+The launcher also applies the upstream project recommendations for Claude Code:
+
+- `ANTHROPIC_SMALL_FAST_MODEL=gpt-5.4-mini[1m]` unless already set.
+- `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` unless already set.
+- `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1` unless already set.
 
 Override launcher defaults with environment variables:
 
@@ -152,6 +161,19 @@ caching to help with repeated prefixes, but it still means the full translated
 input is sent on each turn. A deeper optimization is to add a stateful Responses
 mapping using stored responses and `previous_response_id`, so repeated history
 does not have to be resent by `cc-proxy` after the first turn.
+
+Experimental Phase 1 stateful mode is available behind a feature flag:
+
+```bash
+CCP_CODEX_STATEFUL_RESPONSES=1 scripts/cc-proxy-ensure restart
+```
+
+When enabled, streaming message responses are stored upstream. On later turns in
+the same Claude Code session, `cc-proxy` sends `previous_response_id` and only
+the message-history tail not already covered by the stored response. System
+instructions and tool schemas are still resent in Phase 1 so MCPs, skills,
+agents, and Claude Code tool contracts remain intact while we measure the
+message-history reduction.
 
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with

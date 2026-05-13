@@ -7,7 +7,8 @@ HOST="${CC_PROXY_HOST:-127.0.0.1}"
 PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
-MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5}"
+MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5[1m]}"
+SMALL_FAST_MODEL="${CLAUDE_GPT_SMALL_FAST_MODEL:-gpt-5.4-mini[1m]}"
 LEAN_DEFAULT="${CLAUDE_GPT_LEAN:-0}"
 
 is_truthy() {
@@ -15,6 +16,14 @@ is_truthy() {
 		1 | true | yes | on) return 0 ;;
 		*) return 1 ;;
 	esac
+}
+
+strip_context_suffix() {
+	local model="$1"
+	case "$model" in
+		*"[1m]" | *"[1M]") model="${model%????}" ;;
+	esac
+	printf '%s' "$model"
 }
 
 if [[ -n "${CLAUDE_GPT_TOOLS+x}" ]]; then
@@ -75,18 +84,29 @@ if [[ "$has_model" -eq 0 ]]; then
 	claude_args+=(--model "$MODEL")
 fi
 claude_args+=("$@")
+PROXY_MODEL="$(strip_context_suffix "$REQUESTED_MODEL")"
 
 if is_truthy "${CLAUDE_GPT_DRY_RUN:-0}"; then
-	printf 'ANTHROPIC_BASE_URL=%q ANTHROPIC_API_KEY=%q claude' "$BASE_URL" "$API_KEY"
+	printf 'CCP_CODEX_MODEL=%q ' "${CCP_CODEX_MODEL:-$PROXY_MODEL}"
+	printf 'ANTHROPIC_BASE_URL=%q ANTHROPIC_API_KEY=%q ' "$BASE_URL" "$API_KEY"
+	printf 'ANTHROPIC_SMALL_FAST_MODEL=%q ' "${ANTHROPIC_SMALL_FAST_MODEL:-$SMALL_FAST_MODEL}"
+	printf 'CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=%q ' "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}"
+	printf 'CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=%q claude' "${CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK:-1}"
 	printf ' %q' "${claude_args[@]}"
 	printf '\n'
 	exit 0
 fi
 
-ensure_env=(CCP_CODEX_MODEL="${CCP_CODEX_MODEL:-$REQUESTED_MODEL}")
+ensure_env=(CCP_CODEX_MODEL="${CCP_CODEX_MODEL:-$PROXY_MODEL}")
 if is_truthy "${CLAUDE_GPT_PROXY_VERBOSE:-1}"; then
 	ensure_env+=(CCP_LOG_VERBOSE=1)
 fi
 env "${ensure_env[@]}" "$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
 
-exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude "${claude_args[@]}"
+exec env \
+	ANTHROPIC_BASE_URL="$BASE_URL" \
+	ANTHROPIC_API_KEY="$API_KEY" \
+	ANTHROPIC_SMALL_FAST_MODEL="${ANTHROPIC_SMALL_FAST_MODEL:-$SMALL_FAST_MODEL}" \
+	CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-1}" \
+	CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK="${CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK:-1}" \
+	claude "${claude_args[@]}"

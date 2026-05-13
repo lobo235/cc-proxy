@@ -22,16 +22,24 @@ type Provider struct {
 	Client                  Client
 	Effort                  string
 	CompactionEffort        string
+	StatefulResponses       bool
 	DisabledSkillToolSkills []string
 	Logger                  *slog.Logger
 	Verbose                 bool
+	mu                      sync.Mutex
+	state                   map[string]responseState
+}
+
+type responseState struct {
+	ResponseID      string
+	CoveredMessages int
 }
 
 func (p Provider) Name() string {
 	return string(provider.NameCodex)
 }
 
-func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
+func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
 	log := p.logger()
 	effort := p.Effort
 	shape := summarizeRequestShape(call.Request.Raw)
@@ -49,13 +57,18 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 			)
 		}
 	}
-	body, err := translate.Translate(call.Request, translate.Options{
+	wantsStream := call.Request.WantsStream()
+	statefulStore := p.StatefulResponses && wantsStream
+	previousID, messageStart := p.previousResponse(call.Meta.SessionID, shape.MessageCount, wantsStream)
+	body, err := translate.TranslateFromMessageIndex(call.Request, translate.Options{
 		SessionID:               call.Meta.SessionID,
 		ServiceTier:             call.Route.ServiceTier,
 		Model:                   call.Route.UpstreamModel,
 		Effort:                  effort,
 		DisabledSkillToolSkills: p.DisabledSkillToolSkills,
-	})
+		Store:                   statefulStore,
+		PreviousResponseID:      previousID,
+	}, messageStart)
 	if err != nil {
 		return err
 	}
@@ -65,6 +78,10 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 			"model", body.Model,
 			"input_items", len(body.Input),
 			"tools", len(body.Tools),
+			"stateful_enabled", p.StatefulResponses,
+			"stateful_store", statefulStore,
+			"previous_response_id", body.PreviousResponseID != "",
+			"message_start", messageStart,
 			"service_tier", body.ServiceTier,
 			"reasoning_effort", reasoningEffort(body.Reasoning),
 			"include_reasoning", containsString(body.Include, "reasoning.encrypted_content"),
@@ -100,6 +117,11 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 		message, err := translate.TranslateResponse(resp.Body, translate.StreamOptions{
 			MessageID: "msg_" + call.Meta.RequestID,
 			Model:     call.Route.UpstreamModel,
+			OnResponseID: func(id string) {
+				if statefulStore {
+					p.rememberResponse(call.Meta.SessionID, id, shape.MessageCount+1)
+				}
+			},
 			OnUsage: func(u translate.Usage) {
 				usage = u
 				hasUsage = true
@@ -131,6 +153,11 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 	err = translate.TranslateStream(resp.Body, writer, translate.StreamOptions{
 		MessageID: "msg_" + call.Meta.RequestID,
 		Model:     call.Route.UpstreamModel,
+		OnResponseID: func(id string) {
+			if statefulStore {
+				p.rememberResponse(call.Meta.SessionID, id, shape.MessageCount+1)
+			}
+		},
 		OnUsage: func(u translate.Usage) {
 			usage = u
 			hasUsage = true
@@ -147,6 +174,34 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 		)
 	}
 	return err
+}
+
+func (p *Provider) previousResponse(sessionID string, messageCount int, wantsStream bool) (string, int) {
+	if !p.StatefulResponses || sessionID == "" || !wantsStream {
+		return "", 0
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state == nil {
+		return "", 0
+	}
+	state := p.state[sessionID]
+	if state.ResponseID == "" || state.CoveredMessages <= 0 || messageCount <= state.CoveredMessages {
+		return "", 0
+	}
+	return state.ResponseID, state.CoveredMessages
+}
+
+func (p *Provider) rememberResponse(sessionID, responseID string, coveredMessages int) {
+	if !p.StatefulResponses || sessionID == "" || responseID == "" || coveredMessages <= 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.state == nil {
+		p.state = map[string]responseState{}
+	}
+	p.state[sessionID] = responseState{ResponseID: responseID, CoveredMessages: coveredMessages}
 }
 
 func (p Provider) logger() *slog.Logger {

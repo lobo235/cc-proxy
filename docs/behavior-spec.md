@@ -88,6 +88,8 @@ Codex upstream requests set:
 - `x-client-request-id`
 - `x-codex-window-id` as `<session-id>:0`
 - prompt cache key from session id in translated request
+- when `CCP_CODEX_STATEFUL_RESPONSES` is enabled, `previous_response_id` after
+  the first stored streaming response in a session
 
 Kimi translated requests use `prompt_cache_key` when a session id exists.
 
@@ -120,6 +122,11 @@ Important config:
 - `CCP_CODEX_EFFORT` / `codex.effort`: force Codex reasoning effort.
   Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
   and Claude-facing alias `max`.
+- `CCP_CODEX_STATEFUL_RESPONSES` / `codex.statefulResponses`: experimental.
+  When set, streaming Codex Responses requests use `store: true`; after a
+  response id is observed, later turns in the same Claude Code session may send
+  `previous_response_id` and only the new message-history tail. System
+  instructions and tool schemas are still sent on every request in Phase 1.
 - `CCP_CODEX_SERVICE_TIER` / `codex.serviceTier`: `fast`, `priority`, or
   `flex`; `fast` maps to `priority`.
 - `CCP_CODEX_BASE_URL` / `codex.baseUrl`: Codex endpoint override.
@@ -281,10 +288,13 @@ Logs are mirrored to stderr when `CCP_LOG_STDERR` is set.
 
 ## Known Limits
 
-- Codex requests are currently forwarded statelessly with `store: false` and no
+- Codex requests default to stateless forwarding with `store: false` and no
   `previous_response_id`. Claude Code may send full conversation history and
   tool schemas on each turn; `prompt_cache_key` can improve upstream cache hits
   but does not reduce the request body sent by `cc-proxy`.
+- Experimental stateful forwarding only trims repeated message history in
+  Phase 1. It deliberately keeps resending system instructions and tool schemas
+  until tool-schema elision is proven safe.
 - Codex image blocks nested inside tool results are omitted.
 - Codex reasoning blocks are dropped.
 - Codex built-in tool streams such as file search and code interpreter are not

@@ -16,9 +16,10 @@ import (
 )
 
 type StreamOptions struct {
-	MessageID string
-	Model     string
-	OnUsage   func(Usage)
+	MessageID    string
+	Model        string
+	OnUsage      func(Usage)
+	OnResponseID func(string)
 }
 
 type Usage struct {
@@ -48,7 +49,8 @@ type upstreamStreamEvent struct {
 		Arguments string `json:"arguments,omitempty"`
 	} `json:"item,omitempty"`
 	Response struct {
-		Usage Usage `json:"usage,omitempty"`
+		ID    string `json:"id,omitempty"`
+		Usage Usage  `json:"usage,omitempty"`
 	} `json:"response,omitempty"`
 }
 
@@ -269,6 +271,10 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 			typ = evt.Event
 		}
 		switch typ {
+		case "response.created":
+			if opts.OnResponseID != nil && payload.Response.ID != "" {
+				opts.OnResponseID(payload.Response.ID)
+			}
 		case "response.output_item.added":
 			switch payload.Item.Type {
 			case "message":
@@ -365,6 +371,9 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 				return err
 			}
 		case "response.completed":
+			if opts.OnResponseID != nil && payload.Response.ID != "" {
+				opts.OnResponseID(payload.Response.ID)
+			}
 			u := payload.Response.Usage
 			usage = &u
 		case "response.failed", "response.error", "error":

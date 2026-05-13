@@ -63,7 +63,7 @@ func serve() error {
 	defer closeLog()
 	log.Info("cc-proxy starting", "version", version, "log_file", logPath, "verbose", cfg.Log.Verbose)
 	s := server.New(cfg, server.Providers{
-		Codex: codexprovider.Provider{
+		Codex: &codexprovider.Provider{
 			Client: codexprovider.Client{
 				BaseURL:        cfg.Codex.BaseURL,
 				InputTokensURL: cfg.Codex.InputTokensURL,
@@ -74,6 +74,7 @@ func serve() error {
 			},
 			Effort:                  cfg.Codex.Effort,
 			CompactionEffort:        cfg.Codex.CompactionEffort,
+			StatefulResponses:       cfg.Codex.StatefulResponses,
 			DisabledSkillToolSkills: cfg.SkillToolDisabledSkills,
 			Logger:                  log,
 			Verbose:                 cfg.Log.Verbose,

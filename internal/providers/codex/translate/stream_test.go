@@ -122,6 +122,31 @@ func TestTranslateStreamReportsFullCodexUsage(t *testing.T) {
 	}
 }
 
+func TestTranslateStreamReportsResponseID(t *testing.T) {
+	upstream := strings.NewReader(strings.Join([]string{
+		`event: response.created`,
+		`data: {"type":"response.created","response":{"id":"resp_123"}}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"id":"resp_456","usage":{"input_tokens":1}}}`,
+		``,
+	}, "\n"))
+	var ids []string
+	var out bytes.Buffer
+	if err := TranslateStream(upstream, &out, StreamOptions{
+		MessageID: "msg_ccp",
+		Model:     "gpt-5.5",
+		OnResponseID: func(id string) {
+			ids = append(ids, id)
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(ids, ",") != "resp_123,resp_456" {
+		t.Fatalf("ids = %v, want resp_123 then resp_456", ids)
+	}
+}
+
 func TestTranslateResponseCollectsNonStreamMessage(t *testing.T) {
 	upstream := strings.NewReader(strings.Join([]string{
 		`event: response.output_item.added`,
