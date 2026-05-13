@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
+	"strings"
 )
 
 const DefaultPort = 18765
@@ -49,12 +51,13 @@ type LogConfig struct {
 }
 
 type Config struct {
-	Port          int
-	AliasProvider AliasProvider
-	Codex         CodexConfig
-	Kimi          KimiConfig
-	Log           LogConfig
-	ConfigPath    string
+	Port                    int
+	AliasProvider           AliasProvider
+	Codex                   CodexConfig
+	Kimi                    KimiConfig
+	Log                     LogConfig
+	ConfigPath              string
+	SkillToolDisabledSkills []string
 }
 
 type LoadOptions struct {
@@ -130,6 +133,7 @@ func Load(opts LoadOptions) (Config, error) {
 	if _, ok := env["CCP_LOG_VERBOSE"]; ok {
 		cfg.Log.Verbose = true
 	}
+	cfg.SkillToolDisabledSkills = disabledSkillToolSkills(env, opts.HomeDir)
 
 	return cfg, nil
 }
@@ -213,4 +217,95 @@ func firstSet(values ...string) string {
 
 func firstNonEmpty(values ...string) string {
 	return firstSet(values...)
+}
+
+func disabledSkillToolSkills(env map[string]string, home string) []string {
+	if raw, ok := env["CCP_SKILL_TOOL_DISABLED_SKILLS"]; ok {
+		return parseCSV(raw)
+	}
+	if home == "" {
+		if h, err := os.UserHomeDir(); err == nil {
+			home = h
+		}
+	}
+	if home == "" {
+		return nil
+	}
+	names := map[string]struct{}{}
+	for _, root := range []string{
+		filepath.Join(home, ".claude", "skills"),
+		filepath.Join(home, ".codex", "skills"),
+	} {
+		entries, err := os.ReadDir(root)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(root, entry.Name(), "SKILL.md")
+			name, disabled := readSkillMetadata(path)
+			if !disabled {
+				continue
+			}
+			if name == "" {
+				name = entry.Name()
+			}
+			names[name] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(names))
+	for name := range names {
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func parseCSV(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	seen := map[string]struct{}{}
+	for _, part := range parts {
+		name := strings.TrimSpace(part)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func readSkillMetadata(path string) (string, bool) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	var name string
+	disabled := false
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "---" || line == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.Trim(strings.TrimSpace(value), `"'`)
+		switch key {
+		case "name":
+			name = value
+		case "disable-model-invocation":
+			disabled = strings.EqualFold(value, "true")
+		}
+	}
+	return name, disabled
 }

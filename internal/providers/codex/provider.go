@@ -19,11 +19,12 @@ import (
 var unsupportedInputTokenEndpoints sync.Map
 
 type Provider struct {
-	Client           Client
-	Effort           string
-	CompactionEffort string
-	Logger           *slog.Logger
-	Verbose          bool
+	Client                  Client
+	Effort                  string
+	CompactionEffort        string
+	DisabledSkillToolSkills []string
+	Logger                  *slog.Logger
+	Verbose                 bool
 }
 
 func (p Provider) Name() string {
@@ -49,10 +50,11 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 		}
 	}
 	body, err := translate.Translate(call.Request, translate.Options{
-		SessionID:   call.Meta.SessionID,
-		ServiceTier: call.Route.ServiceTier,
-		Model:       call.Route.UpstreamModel,
-		Effort:      effort,
+		SessionID:               call.Meta.SessionID,
+		ServiceTier:             call.Route.ServiceTier,
+		Model:                   call.Route.UpstreamModel,
+		Effort:                  effort,
+		DisabledSkillToolSkills: p.DisabledSkillToolSkills,
 	})
 	if err != nil {
 		return err

@@ -2,6 +2,7 @@ package translate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/lobo235/cc-proxy/internal/provider"
@@ -171,6 +172,33 @@ func TestTranslateAddsItemsToArrayToolSchemas(t *testing.T) {
 	}
 	if len(autoGenerateKeys.Items) != 0 {
 		t.Fatalf("auto_generate_keys.items len = %d, want 0", len(autoGenerateKeys.Items))
+	}
+}
+
+func TestTranslateAddsSkillToolDisabledSkillInstructions(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.5",
+			"system":"base instructions",
+			"messages":[{"role":"user","content":"hello"}],
+			"tools":[{"name":"Skill","description":"run a skill","input_schema":{"type":"object","properties":{"skill":{"type":"string"}}}}]
+		}`),
+	}
+	got, err := Translate(req, Options{DisabledSkillToolSkills: []string{"domain-model", "ubiquitous-language"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"base instructions",
+		"Do not call the Skill tool",
+		"domain-model",
+		"ubiquitous-language",
+		"disable-model-invocation: true",
+	} {
+		if !strings.Contains(got.Instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, got.Instructions)
+		}
 	}
 }
 

@@ -11,10 +11,11 @@ import (
 )
 
 type Options struct {
-	SessionID   string
-	ServiceTier string
-	Model       string
-	Effort      string
+	SessionID               string
+	ServiceTier             string
+	Model                   string
+	Effort                  string
+	DisabledSkillToolSkills []string
 }
 
 type ResponsesRequest struct {
@@ -173,7 +174,11 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	}
 	if len(anthropic.Tools) > 0 {
 		out.Tools = make([]Tool, 0, len(anthropic.Tools))
+		hasSkillTool := false
 		for _, tool := range anthropic.Tools {
+			if tool.Name == "Skill" {
+				hasSkillTool = true
+			}
 			parameters, err := normalizeToolParameters(tool.InputSchema)
 			if err != nil {
 				return ResponsesRequest{}, fmt.Errorf("normalizing tool %q schema: %w", tool.Name, err)
@@ -184,6 +189,9 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 				Description: tool.Description,
 				Parameters:  parameters,
 			})
+		}
+		if hasSkillTool {
+			out.Instructions = appendSkillToolCompatibility(out.Instructions, opts.DisabledSkillToolSkills)
 		}
 	}
 	if opts.SessionID != "" {
@@ -196,6 +204,19 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		out.ServiceTier = opts.ServiceTier
 	}
 	return out, nil
+}
+
+func appendSkillToolCompatibility(instructions string, disabledSkills []string) string {
+	if len(disabledSkills) == 0 {
+		return instructions
+	}
+	compat := "cc-proxy compatibility: Do not call the Skill tool for these skills because their SKILL.md declares disable-model-invocation: true: " +
+		strings.Join(disabledSkills, ", ") +
+		". If one is relevant, inspect its SKILL.md with normal file-reading tools and apply the instructions inline in the current conversation instead."
+	if strings.TrimSpace(instructions) == "" {
+		return compat
+	}
+	return instructions + "\n\n" + compat
 }
 
 func InputTokensRequestFromResponses(req ResponsesRequest) InputTokensRequest {

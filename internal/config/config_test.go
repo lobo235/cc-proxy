@@ -72,3 +72,40 @@ func TestLoadInvalidPort(t *testing.T) {
 		t.Fatal("expected invalid port error")
 	}
 }
+
+func TestLoadFindsDisabledModelInvocationSkills(t *testing.T) {
+	home := t.TempDir()
+	writeSkill(t, filepath.Join(home, ".claude", "skills", "ubiq", "SKILL.md"), `---
+name: ubiquitous-language
+description: glossary
+disable-model-invocation: true
+---
+`)
+	writeSkill(t, filepath.Join(home, ".codex", "skills", "normal", "SKILL.md"), `---
+name: normal-skill
+description: fine
+---
+`)
+	cfg, err := Load(LoadOptions{
+		Env:        map[string]string{},
+		ConfigPath: filepath.Join(t.TempDir(), "missing.json"),
+		Stderr:     &bytes.Buffer{},
+		HomeDir:    home,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.SkillToolDisabledSkills) != 1 || cfg.SkillToolDisabledSkills[0] != "ubiquitous-language" {
+		t.Fatalf("disabled skills = %#v, want ubiquitous-language", cfg.SkillToolDisabledSkills)
+	}
+}
+
+func writeSkill(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
