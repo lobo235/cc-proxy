@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -110,4 +111,17 @@ type ErrNotImplemented struct {
 
 func (e ErrNotImplemented) Error() string {
 	return e.Provider + " " + e.Operation + " not implemented yet"
+}
+
+type UpstreamError struct {
+	Provider   string
+	StatusCode int
+	Body       string
+}
+
+func (e UpstreamError) Error() string {
+	if e.Body == "" {
+		return fmt.Sprintf("%s upstream returned %d %s", e.Provider, e.StatusCode, http.StatusText(e.StatusCode))
+	}
+	return fmt.Sprintf("%s upstream returned %d %s: %s", e.Provider, e.StatusCode, http.StatusText(e.StatusCode), e.Body)
 }

@@ -8,10 +8,14 @@ HOST="${CC_PROXY_HOST:-127.0.0.1}"
 PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 HEALTH_URL="${BASE_URL%/}/healthz"
-STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cc-proxy"
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy"
+LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cc-proxy"
 PID_FILE="$STATE_DIR/cc-proxy.pid"
-LOG_FILE="$STATE_DIR/cc-proxy.log"
+LEGACY_PID_FILE="$LEGACY_STATE_DIR/cc-proxy.pid"
+PROXY_LOG_FILE="$STATE_DIR/proxy.log"
+LAUNCHER_LOG_FILE="$STATE_DIR/launcher.log"
 PROXY_BIN="$REPO_ROOT/bin/cc-proxy"
+COMMAND="${1:-ensure}"
 
 is_healthy() {
 	curl -fsS --max-time 1 "$HEALTH_URL" >/dev/null 2>&1
@@ -35,37 +39,123 @@ wait_for_health() {
 
 mkdir -p "$STATE_DIR"
 
-if is_healthy; then
-	exit 0
-fi
-
-if [[ -f "$PID_FILE" ]]; then
-	pid="$(<"$PID_FILE")"
-	if is_pid_alive "$pid"; then
-		if wait_for_health; then
-			exit 0
-		fi
-		echo "cc-proxy process $pid is running but $HEALTH_URL did not become healthy." >&2
-		echo "See $LOG_FILE for details." >&2
-		exit 1
+status() {
+	if is_healthy; then
+		echo "cc-proxy healthy at $HEALTH_URL"
+		echo "proxy log: $PROXY_LOG_FILE"
+		echo "launcher log: $LAUNCHER_LOG_FILE"
+		return 0
 	fi
-	rm -f "$PID_FILE"
-fi
+	echo "cc-proxy is not healthy at $HEALTH_URL" >&2
+	return 1
+}
 
-if [[ ! -x "$PROXY_BIN" ]]; then
-	( cd "$REPO_ROOT" && make build >/dev/null )
-fi
+stop_proxy() {
+	local stopped=0
+	local file pid proc cwd cmdline
+	for file in "$PID_FILE" "$LEGACY_PID_FILE"; do
+		if [[ ! -f "$file" ]]; then
+			continue
+		fi
+		pid="$(<"$file")"
+		if is_pid_alive "$pid"; then
+			kill "$pid" >/dev/null 2>&1 || true
+			stopped=1
+		fi
+		rm -f "$file"
+	done
+	for proc in /proc/[0-9]*; do
+		pid="${proc##*/}"
+		if [[ "$pid" == "$$" ]]; then
+			continue
+		fi
+		cwd="$(readlink "$proc/cwd" 2>/dev/null || true)"
+		if [[ "$cwd" != "$REPO_ROOT" ]]; then
+			continue
+		fi
+		cmdline="$(tr '\0' ' ' <"$proc/cmdline" 2>/dev/null || true)"
+		case "$cmdline" in
+			*"bin/cc-proxy serve"*)
+				kill "$pid" >/dev/null 2>&1 || true
+				stopped=1
+				;;
+		esac
+	done
+	if [[ "$stopped" -eq 1 ]]; then
+		for _ in {1..20}; do
+			if ! is_healthy; then
+				return 0
+			fi
+			sleep 0.25
+		done
+		echo "cc-proxy stop requested but $HEALTH_URL is still healthy." >&2
+		return 1
+	fi
+	return 0
+}
 
-(
-	cd "$REPO_ROOT"
-	PORT="$PORT" nohup "$PROXY_BIN" serve >>"$LOG_FILE" 2>&1 &
-	echo "$!" >"$PID_FILE"
-)
+start_proxy() {
+	if is_healthy; then
+		return 0
+	fi
 
-if wait_for_health; then
-	exit 0
-fi
+	if [[ -f "$PID_FILE" ]]; then
+		pid="$(<"$PID_FILE")"
+		if is_pid_alive "$pid"; then
+			if wait_for_health; then
+				return 0
+			fi
+			echo "cc-proxy process $pid is running but $HEALTH_URL did not become healthy." >&2
+			echo "Proxy log: $PROXY_LOG_FILE" >&2
+			echo "Launcher log: $LAUNCHER_LOG_FILE" >&2
+			return 1
+		fi
+		rm -f "$PID_FILE"
+	fi
 
-echo "cc-proxy did not become healthy at $HEALTH_URL." >&2
-echo "See $LOG_FILE for details." >&2
-exit 1
+	if [[ ! -x "$PROXY_BIN" ]]; then
+		( cd "$REPO_ROOT" && make build >/dev/null )
+	fi
+
+	(
+		cd "$REPO_ROOT"
+		PORT="$PORT" nohup setsid "$PROXY_BIN" serve >>"$LAUNCHER_LOG_FILE" 2>&1 </dev/null &
+		echo "$!" >"$PID_FILE"
+	)
+
+	if wait_for_health; then
+		return 0
+	fi
+
+	echo "cc-proxy did not become healthy at $HEALTH_URL." >&2
+	echo "Proxy log: $PROXY_LOG_FILE" >&2
+	echo "Launcher log: $LAUNCHER_LOG_FILE" >&2
+	return 1
+}
+
+case "$COMMAND" in
+	ensure | start)
+		start_proxy
+		;;
+	status)
+		status
+		;;
+	stop)
+		stop_proxy
+		;;
+	restart)
+		stop_proxy
+		start_proxy
+		;;
+	log | logs)
+		echo "proxy log: $PROXY_LOG_FILE"
+		echo "launcher log: $LAUNCHER_LOG_FILE"
+		;;
+	tail)
+		tail -f "$PROXY_LOG_FILE"
+		;;
+	*)
+		echo "usage: $0 [ensure|start|status|stop|restart|log|tail]" >&2
+		exit 2
+		;;
+esac

@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -143,6 +145,83 @@ func TestMessagesRoutesCallToProviderSink(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"model":"gpt-5.4"`) {
 		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+func TestMessagesLogsRoutingAndHTTPRequest(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	fp := &fakeProvider{name: "codex"}
+	s := New(config.Config{Port: 18765, AliasProvider: config.AliasProviderCodex}, Providers{
+		Codex: fp,
+		Kimi:  &fakeProvider{name: "kimi"},
+	}, logger)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4","messages":[]}`))
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`"msg":"message routed"`,
+		`"request_id":"`,
+		`"operation":"messages"`,
+		`"provider":"codex"`,
+		`"incoming_model":"gpt-5.4"`,
+		`"upstream_model":"gpt-5.4"`,
+		`"session_seq":1`,
+		`"msg":"http request"`,
+		`"path":"/v1/messages"`,
+		`"status":200`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("logs missing %s:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "sess-1") {
+		t.Fatalf("logs should not include raw session id:\n%s", got)
+	}
+}
+
+func TestVerboseMessagesLogsRequestShape(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	fp := &fakeProvider{name: "codex"}
+	s := New(config.Config{
+		Port:          18765,
+		AliasProvider: config.AliasProviderCodex,
+		Log:           config.LogConfig{Verbose: true},
+	}, Providers{
+		Codex: fp,
+		Kimi:  &fakeProvider{name: "kimi"},
+	}, logger)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{
+		"model":"gpt-5.4",
+		"system":"be brief",
+		"messages":[{"role":"user","content":"one"},{"role":"assistant","content":"two"}],
+		"tools":[{"name":"lookup","input_schema":{"type":"object"}}],
+		"output_config":{"effort":"high"},
+		"stream":false
+	}`))
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`"msg":"message request summary"`,
+		`"message_count":2`,
+		`"tool_count":1`,
+		`"system_kind":"string"`,
+		`"output_effort":"high"`,
+		`"stream":false`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("logs missing %s:\n%s", want, got)
+		}
 	}
 }
 

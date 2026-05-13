@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -126,6 +127,74 @@ func TestProviderMessagesAppliesEffortOverride(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesLogsUpstreamResponse(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n"))
+	}))
+	defer upstream.Close()
+	p := Provider{
+		Client: Client{BaseURL: upstream.URL, AuthStore: store},
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`"msg":"codex upstream response"`,
+		`"request_id":"req_123"`,
+		`"status":200`,
+		`"content_type":"text/event-stream"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("logs missing %s:\n%s", want, got)
+		}
+	}
+}
+
+func TestProviderMessagesReturnsUpstreamErrorWithSnippet(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, `{"error":"contract changed"}`, http.StatusBadGateway)
+	}))
+	defer upstream.Close()
+	p := Provider{Client: Client{BaseURL: upstream.URL, AuthStore: store}}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}, &recordingOut{})
+	if err == nil {
+		t.Fatal("expected upstream error")
+	}
+	if !strings.Contains(err.Error(), "codex upstream returned 502") || !strings.Contains(err.Error(), "contract changed") {
+		t.Fatalf("error = %v", err)
+	}
+}
+
 type recordingOut struct {
 	status int
 	header http.Header
@@ -142,13 +211,4 @@ func (o *recordingOut) WriteJSON(status int, header http.Header, body any) error
 	o.status = status
 	o.header = header
 	return json.NewEncoder(&o.body).Encode(body)
-}
-
-func containsString(items []string, needle string) bool {
-	for _, item := range items {
-		if item == needle {
-			return true
-		}
-	}
-	return false
 }

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -69,7 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/status", s.handleStatus)
 	mux.HandleFunc("/v1/messages", s.handleMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.handleCountTokens)
-	return withNotFound(mux)
+	return s.withRequestLogging(withNotFound(mux))
 }
 
 func (s *Server) ListenAndServe(ctx context.Context) error {
@@ -169,12 +170,13 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, meta, ok := s.routeProvider(w, r, req)
+	p, meta, ok := s.routeProvider(w, r, req, "messages")
 	if !ok {
 		return
 	}
+	s.logRequestSummary("messages", req, meta.meta)
 	if err := p.Messages(r.Context(), meta.messagesCall(req, r), httpMessagesOut{w: w}); err != nil {
-		s.writeProviderError(w, err)
+		s.writeProviderError(w, err, meta.meta)
 	}
 }
 
@@ -187,13 +189,14 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	p, meta, ok := s.routeProvider(w, r, req)
+	p, meta, ok := s.routeProvider(w, r, req, "count_tokens")
 	if !ok {
 		return
 	}
+	s.logRequestSummary("count_tokens", req, meta.meta)
 	resp, err := p.CountTokens(r.Context(), meta.countTokensCall(req, r))
 	if err != nil {
-		s.writeProviderError(w, err)
+		s.writeProviderError(w, err, meta.meta)
 		return
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -250,7 +253,7 @@ func clientMeta(r *http.Request) provider.ClientMeta {
 	}
 }
 
-func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provider.AnthropicMessagesRequest) (provider.Provider, routedCall, bool) {
+func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provider.AnthropicMessagesRequest, operation string) (provider.Provider, routedCall, bool) {
 	sessionID := r.Header.Get("x-claude-code-session-id")
 	now := time.Now()
 	session := s.existingSession(sessionID, now)
@@ -281,6 +284,16 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 		},
 		meta: meta,
 	}
+	s.log.Info("message routed",
+		"request_id", meta.RequestID,
+		"operation", operation,
+		"provider", call.route.Provider,
+		"incoming_model", call.route.IncomingModel,
+		"upstream_model", call.route.UpstreamModel,
+		"service_tier", call.route.ServiceTier,
+		"session_seq", meta.SessionSeq,
+		"session_hash", hashSessionID(sessionID),
+	)
 	switch resolved.Provider {
 	case modelregistry.ProviderCodex:
 		return s.provider.Codex, call, true
@@ -346,13 +359,39 @@ func (s *Server) evictOldestSessions() {
 	}
 }
 
-func (s *Server) writeProviderError(w http.ResponseWriter, err error) {
+func (s *Server) writeProviderError(w http.ResponseWriter, err error, meta provider.CallMeta) {
 	var notImpl provider.ErrNotImplemented
 	if errors.As(err, &notImpl) {
+		s.log.Warn("provider operation not implemented", "request_id", meta.RequestID, "provider", notImpl.Provider, "operation", notImpl.Operation)
 		writeError(w, http.StatusNotImplemented, "not_implemented", notImpl.Error())
 		return
 	}
+	var upstream provider.UpstreamError
+	if errors.As(err, &upstream) {
+		s.log.Warn("provider upstream error", "request_id", meta.RequestID, "provider", upstream.Provider, "status", upstream.StatusCode, "body", upstream.Body)
+		writeError(w, upstreamStatus(upstream.StatusCode), upstreamErrorType(upstream.StatusCode), err.Error())
+		return
+	}
+	s.log.Error("provider operation failed", "request_id", meta.RequestID, "error", err.Error())
 	writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+}
+
+func upstreamStatus(status int) int {
+	if status <= 0 {
+		return http.StatusBadGateway
+	}
+	return status
+}
+
+func upstreamErrorType(status int) string {
+	switch status {
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return "authentication_error"
+	case http.StatusTooManyRequests:
+		return "rate_limit_error"
+	default:
+		return "api_error"
+	}
 }
 
 type httpMessagesOut struct {
@@ -405,10 +444,31 @@ func withNotFound(next http.Handler) http.Handler {
 	})
 }
 
+func (s *Server) withRequestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		if r.URL.Path == "/healthz" && rec.status == http.StatusOK {
+			return
+		}
+		s.log.Info("http request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"bytes", rec.bytes,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
+			"user_agent", r.UserAgent(),
+		)
+	})
+}
+
 type statusRecorder struct {
 	http.ResponseWriter
 	status int
 	wrote  bool
+	bytes  int
 }
 
 func (r *statusRecorder) WriteHeader(status int) {
@@ -419,7 +479,9 @@ func (r *statusRecorder) WriteHeader(status int) {
 
 func (r *statusRecorder) Write(p []byte) (int, error) {
 	r.wrote = true
-	return r.ResponseWriter.Write(p)
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -436,6 +498,91 @@ func writeError(w http.ResponseWriter, status int, typ, message string) {
 			"message": message,
 		},
 	})
+}
+
+func (s *Server) logRequestSummary(operation string, req provider.AnthropicMessagesRequest, meta provider.CallMeta) {
+	if !s.cfg.Log.Verbose {
+		return
+	}
+	summary := summarizeRequest(req.Raw)
+	s.log.Debug("message request summary",
+		"request_id", meta.RequestID,
+		"operation", operation,
+		"raw_bytes", len(req.Raw),
+		"message_count", summary.MessageCount,
+		"tool_count", summary.ToolCount,
+		"system_kind", summary.SystemKind,
+		"output_effort", summary.OutputEffort,
+		"stream", summary.Stream,
+		"max_tokens", summary.MaxTokens,
+	)
+}
+
+type requestSummary struct {
+	MessageCount int
+	ToolCount    int
+	SystemKind   string
+	OutputEffort string
+	Stream       *bool
+	MaxTokens    *int
+}
+
+func summarizeRequest(raw json.RawMessage) requestSummary {
+	var decoded struct {
+		Messages     json.RawMessage `json:"messages"`
+		Tools        json.RawMessage `json:"tools"`
+		System       json.RawMessage `json:"system"`
+		OutputConfig struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+		Stream    *bool `json:"stream"`
+		MaxTokens *int  `json:"max_tokens"`
+	}
+	_ = json.Unmarshal(raw, &decoded)
+	return requestSummary{
+		MessageCount: arrayLen(decoded.Messages),
+		ToolCount:    arrayLen(decoded.Tools),
+		SystemKind:   jsonKind(decoded.System),
+		OutputEffort: decoded.OutputConfig.Effort,
+		Stream:       decoded.Stream,
+		MaxTokens:    decoded.MaxTokens,
+	}
+}
+
+func arrayLen(raw json.RawMessage) int {
+	var items []json.RawMessage
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return 0
+	}
+	return len(items)
+}
+
+func jsonKind(raw json.RawMessage) string {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '"':
+			return "string"
+		case '[':
+			return "array"
+		case '{':
+			return "object"
+		case 'n':
+			return "null"
+		default:
+			return "unknown"
+		}
+	}
+	return "absent"
+}
+
+func hashSessionID(sessionID string) string {
+	if sessionID == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(sessionID))
+	return hex.EncodeToString(sum[:])[:12]
 }
 
 func isAnthropicAlias(model string) bool {

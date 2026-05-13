@@ -63,6 +63,29 @@ needed and then forwards all arguments to `claude`. It defaults to
 scripts/claude-gpt --bare -p --effort max "Reply with exactly: proxy-ok"
 ```
 
+## Logs and Troubleshooting
+
+When launched through `scripts/claude-gpt`, the proxy is managed by
+`scripts/cc-proxy-ensure`. Runtime logs are written as JSON lines to:
+
+- proxy log: `${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy/proxy.log`
+- launcher log:
+  `${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy/launcher.log`
+
+Useful commands:
+
+```bash
+scripts/cc-proxy-ensure status
+scripts/cc-proxy-ensure log
+scripts/cc-proxy-ensure tail
+scripts/cc-proxy-ensure restart
+```
+
+Default logging records request routing, HTTP status, upstream Codex status, and
+provider errors with request IDs. Set `CCP_LOG_VERBOSE=1` before starting the
+proxy to add redacted request-shape and translation summaries for contract
+debugging.
+
 ## Attribution
 
 This project is based on the MIT-licensed `raine/claude-code-proxy` project at

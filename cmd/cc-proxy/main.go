@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"syscall"
 
@@ -54,7 +56,12 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	log, closeLog, logPath, err := newLogger(cfg)
+	if err != nil {
+		return err
+	}
+	defer closeLog()
+	log.Info("cc-proxy starting", "version", version, "log_file", logPath, "verbose", cfg.Log.Verbose)
 	s := server.New(cfg, server.Providers{
 		Codex: codexprovider.Provider{
 			Client: codexprovider.Client{
@@ -64,7 +71,9 @@ func serve() error {
 				UserAgent:  cfg.Codex.UserAgent,
 				Version:    version,
 			},
-			Effort: cfg.Codex.Effort,
+			Effort:  cfg.Codex.Effort,
+			Logger:  log,
+			Verbose: cfg.Log.Verbose,
 		},
 		Kimi: provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)
@@ -78,6 +87,28 @@ func serve() error {
 		return nil
 	}
 	return err
+}
+
+func newLogger(cfg config.Config) (*slog.Logger, func() error, string, error) {
+	stateDir := config.StateDir(nil, "")
+	if err := os.MkdirAll(stateDir, 0o755); err != nil {
+		return nil, nil, "", fmt.Errorf("creating log directory %s: %w", stateDir, err)
+	}
+	logPath := filepath.Join(stateDir, "proxy.log")
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, nil, "", fmt.Errorf("opening log file %s: %w", logPath, err)
+	}
+	level := slog.LevelInfo
+	if cfg.Log.Verbose {
+		level = slog.LevelDebug
+	}
+	var out io.Writer = file
+	if cfg.Log.Stderr {
+		out = io.MultiWriter(file, os.Stderr)
+	}
+	logger := slog.New(slog.NewJSONHandler(out, &slog.HandlerOptions{Level: level}))
+	return logger, file.Close, logPath, nil
 }
 
 func runProviderCommand(name string, args []string) error {

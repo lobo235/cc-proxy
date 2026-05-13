@@ -235,12 +235,28 @@ Upstream 429 retries:
 
 ## Logging
 
-Logs are JSON lines at `$XDG_STATE_HOME/claude-code-proxy/proxy.log`, rotated
-at 20 MiB. Secrets are redacted by key name, including authorization,
-access/refresh tokens, ID tokens, API keys, codes, and ChatGPT account IDs.
+Logs are JSON lines at
+`${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy/proxy.log`.
+When the helper scripts launch the proxy, pre-start launcher output is written
+to `${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy/launcher.log`.
 
-Warnings and errors are always mirrored to stderr. All levels are mirrored when
-`CCP_LOG_STDERR` is set.
+Default logs include:
+
+- server startup with version and log path
+- HTTP method/path/status/duration/byte count, excluding healthy `/healthz`
+  probes
+- message routing decisions with request id, provider, incoming model,
+  upstream model, service tier, session sequence, and hashed session id
+- Codex upstream response status, duration, and content type
+- provider and upstream errors with bounded, redacted upstream error snippets
+
+Verbose logging is enabled with `CCP_LOG_VERBOSE=1` or `log.verbose=true`.
+Verbose logs add request-shape summaries and translated Codex request summaries:
+message count, tool count, system kind, output effort, stream flag, upstream
+input item count, tool count, service tier, and reasoning effort. Full prompts,
+tool arguments, auth headers, and provider tokens are not logged by default.
+
+Logs are mirrored to stderr when `CCP_LOG_STDERR` is set.
 
 ## Known Limits
 
