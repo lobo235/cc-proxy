@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -114,19 +115,9 @@ func (s *Server) handleMessages(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := p.HandleMessages(r.Context(), req, meta)
-	if err != nil {
+	if err := p.Messages(r.Context(), meta.messagesCall(req, r), httpMessagesOut{w: w}); err != nil {
 		s.writeProviderError(w, err)
-		return
 	}
-	defer resp.Body.Close()
-	for k, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(k, v)
-		}
-	}
-	w.WriteHeader(resp.StatusCode)
-	_, _ = ioCopy(w, resp.Body)
 }
 
 func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +133,7 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp, err := p.HandleCountTokens(r.Context(), req, meta)
+	resp, err := p.CountTokens(r.Context(), meta.countTokensCall(req, r))
 	if err != nil {
 		s.writeProviderError(w, err)
 		return
@@ -150,24 +141,61 @@ func (s *Server) handleCountTokens(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, resp)
 }
 
-func (s *Server) parseProviderRequest(w http.ResponseWriter, r *http.Request) (provider.Request, bool) {
+func (s *Server) parseProviderRequest(w http.ResponseWriter, r *http.Request) (provider.AnthropicMessagesRequest, bool) {
 	defer r.Body.Close()
-	var req provider.Request
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	data, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid request body: "+err.Error())
+		return provider.AnthropicMessagesRequest{}, false
+	}
+	var req provider.AnthropicMessagesRequest
+	if err := json.Unmarshal(data, &req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", "Invalid JSON: "+err.Error())
-		return provider.Request{}, false
+		return provider.AnthropicMessagesRequest{}, false
 	}
 	if req.Model == "" {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", `Missing "model" in request body. `+modelregistry.SupportedMessage(s.cfg.AliasProvider))
-		return provider.Request{}, false
+		return provider.AnthropicMessagesRequest{}, false
 	}
 	req.Model = modelregistry.NormalizeIncomingModel(req.Model)
+	req.Raw = append(req.Raw[:0], data...)
 	return req, true
 }
 
-func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provider.Request) (provider.Provider, provider.Context, bool) {
+type routedCall struct {
+	route provider.Route
+	meta  provider.CallMeta
+}
+
+func (c routedCall) messagesCall(req provider.AnthropicMessagesRequest, r *http.Request) provider.MessagesCall {
+	return provider.MessagesCall{
+		Request: req,
+		Route:   c.route,
+		Meta:    c.meta,
+		Client:  clientMeta(r),
+	}
+}
+
+func (c routedCall) countTokensCall(req provider.AnthropicMessagesRequest, r *http.Request) provider.CountTokensCall {
+	return provider.CountTokensCall{
+		Request: req,
+		Route:   c.route,
+		Meta:    c.meta,
+		Client:  clientMeta(r),
+	}
+}
+
+func clientMeta(r *http.Request) provider.ClientMeta {
+	return provider.ClientMeta{
+		Headers: r.Header.Clone(),
+		Remote:  r.RemoteAddr,
+	}
+}
+
+func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provider.AnthropicMessagesRequest) (provider.Provider, routedCall, bool) {
 	sessionID := r.Header.Get("x-claude-code-session-id")
-	session := s.existingSession(sessionID, time.Now())
+	now := time.Now()
+	session := s.existingSession(sessionID, now)
 	aliasProvider := s.cfg.AliasProvider
 	if session != nil && session.HasAffinity {
 		aliasProvider = session.AffinityProvider
@@ -175,10 +203,10 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 	resolved, ok := modelregistry.Resolve(req.Model, aliasProvider)
 	if !ok {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("Unknown model %q. %s", req.Model, modelregistry.SupportedMessage(s.cfg.AliasProvider)))
-		return nil, provider.Context{}, false
+		return nil, routedCall{}, false
 	}
-	current := s.recordSessionRequest(sessionID, session, resolved.Provider, req.Model, time.Now())
-	meta := provider.Context{
+	current := s.recordSessionRequest(sessionID, session, resolved.Provider, req.Model, now)
+	meta := provider.CallMeta{
 		RequestID:  randomID(),
 		SessionID:  sessionID,
 		SessionSeq: 0,
@@ -186,14 +214,23 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 	if current != nil {
 		meta.SessionSeq = current.Seq
 	}
+	call := routedCall{
+		route: provider.Route{
+			Provider:      provider.NameFromRegistry(resolved.Provider),
+			IncomingModel: req.Model,
+			UpstreamModel: resolved.Model,
+			ServiceTier:   resolved.ServiceTier,
+		},
+		meta: meta,
+	}
 	switch resolved.Provider {
 	case modelregistry.ProviderCodex:
-		return s.provider.Codex, meta, true
+		return s.provider.Codex, call, true
 	case modelregistry.ProviderKimi:
-		return s.provider.Kimi, meta, true
+		return s.provider.Kimi, call, true
 	default:
 		writeError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("Unknown provider for model %q", req.Model))
-		return nil, provider.Context{}, false
+		return nil, routedCall{}, false
 	}
 }
 
@@ -258,6 +295,45 @@ func (s *Server) writeProviderError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
+}
+
+type httpMessagesOut struct {
+	w http.ResponseWriter
+}
+
+func (o httpMessagesOut) StartStream(status int, header http.Header) (io.Writer, error) {
+	copyHeader(o.w.Header(), header)
+	if o.w.Header().Get("content-type") == "" {
+		o.w.Header().Set("content-type", "text/event-stream")
+	}
+	o.w.WriteHeader(status)
+	return flushWriter{w: o.w}, nil
+}
+
+func (o httpMessagesOut) WriteJSON(status int, header http.Header, body any) error {
+	copyHeader(o.w.Header(), header)
+	writeJSON(o.w, status, body)
+	return nil
+}
+
+type flushWriter struct {
+	w http.ResponseWriter
+}
+
+func (w flushWriter) Write(data []byte) (int, error) {
+	n, err := w.w.Write(data)
+	if flusher, ok := w.w.(http.Flusher); ok {
+		flusher.Flush()
+	}
+	return n, err
+}
+
+func copyHeader(dst, src http.Header) {
+	for k, values := range src {
+		for _, v := range values {
+			dst.Add(k, v)
+		}
+	}
 }
 
 func withNotFound(next http.Handler) http.Handler {

@@ -59,6 +59,42 @@ func TestCountTokensRoutesToProvider(t *testing.T) {
 	}
 }
 
+func TestMessagesRoutesCallToProviderSink(t *testing.T) {
+	fp := &fakeProvider{name: "codex"}
+	s := New(config.Config{Port: 18765, AliasProvider: config.AliasProviderCodex}, Providers{
+		Codex: fp,
+		Kimi:  &fakeProvider{name: "kimi"},
+	}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4[1m]","messages":[],"stream":false}`))
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fp.messageCalls != 1 {
+		t.Fatalf("message calls = %d, want 1", fp.messageCalls)
+	}
+	if fp.lastMessage.Route.IncomingModel != "gpt-5.4" {
+		t.Fatalf("incoming model = %q, want gpt-5.4", fp.lastMessage.Route.IncomingModel)
+	}
+	if fp.lastMessage.Route.UpstreamModel != "gpt-5.4" {
+		t.Fatalf("upstream model = %q, want gpt-5.4", fp.lastMessage.Route.UpstreamModel)
+	}
+	if fp.lastMessage.Meta.SessionID != "sess-1" || fp.lastMessage.Meta.SessionSeq != 1 {
+		t.Fatalf("meta = %+v, want session sess-1 seq 1", fp.lastMessage.Meta)
+	}
+	if !strings.Contains(string(fp.lastMessage.Request.Raw), `"stream":false`) {
+		t.Fatalf("raw request = %s", string(fp.lastMessage.Request.Raw))
+	}
+	if got := rec.Header().Get("x-provider"); got != "codex" {
+		t.Fatalf("x-provider = %q, want codex", got)
+	}
+	if !strings.Contains(rec.Body.String(), `"model":"gpt-5.4"`) {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
 func testProviders() Providers {
 	return Providers{
 		Codex: provider.NotImplemented{ProviderName: "codex"},
@@ -67,21 +103,24 @@ func testProviders() Providers {
 }
 
 type fakeProvider struct {
-	name       string
-	countCalls int
+	name         string
+	countCalls   int
+	messageCalls int
+	lastMessage  provider.MessagesCall
 }
 
 func (p *fakeProvider) Name() string { return p.name }
 
-func (p *fakeProvider) HandleMessages(context.Context, provider.Request, provider.Context) (*http.Response, error) {
-	return nil, provider.ErrNotImplemented{Provider: p.name, Operation: "messages"}
+func (p *fakeProvider) Messages(_ context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
+	p.messageCalls++
+	p.lastMessage = call
+	return out.WriteJSON(http.StatusOK, http.Header{"x-provider": []string{p.name}}, map[string]any{
+		"type":  "message",
+		"model": call.Route.UpstreamModel,
+	})
 }
 
-func (p *fakeProvider) HandleCountTokens(context.Context, provider.Request, provider.Context) (provider.CountTokensResponse, error) {
+func (p *fakeProvider) CountTokens(context.Context, provider.CountTokensCall) (provider.CountTokensResponse, error) {
 	p.countCalls++
 	return provider.CountTokensResponse{InputTokens: 42}, nil
 }
-
-func (p *fakeProvider) AuthStatus(context.Context) error { return nil }
-
-func (p *fakeProvider) AuthLogout(context.Context) error { return nil }
