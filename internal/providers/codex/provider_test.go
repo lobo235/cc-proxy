@@ -294,6 +294,74 @@ func TestProviderMessagesAppliesEffortOverride(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesCapsCompactionEffort(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+		Include []string `json:"include"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n"))
+	}))
+	defer upstream.Close()
+	p := Provider{
+		Client: Client{BaseURL: upstream.URL, AuthStore: store},
+	}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   compactionRequestRaw(t),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.Reasoning == nil || captured.Reasoning.Effort != "medium" {
+		t.Fatalf("reasoning = %+v, want medium for compaction-shaped request", captured.Reasoning)
+	}
+	if !containsString(captured.Include, "reasoning.encrypted_content") {
+		t.Fatalf("include = %+v, want reasoning.encrypted_content", captured.Include)
+	}
+}
+
+func compactionRequestRaw(t *testing.T) json.RawMessage {
+	t.Helper()
+	messages := make([]map[string]string, 12)
+	for i := range messages {
+		content := "brief"
+		if i == 0 {
+			content = strings.Repeat("context ", 30_000)
+		}
+		messages[i] = map[string]string{"role": "user", "content": content}
+	}
+	raw, err := json.Marshal(map[string]any{
+		"model":      "gpt-5.5",
+		"messages":   messages,
+		"tools":      []map[string]any{{"name": "compact", "input_schema": map[string]any{"type": "object"}}},
+		"max_tokens": 20_000,
+		"output_config": map[string]any{
+			"effort": "max",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
 func boolPtr(v bool) *bool {
 	return &v
 }

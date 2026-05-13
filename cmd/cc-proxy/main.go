@@ -72,9 +72,10 @@ func serve() error {
 				UserAgent:      cfg.Codex.UserAgent,
 				Version:        version,
 			},
-			Effort:  cfg.Codex.Effort,
-			Logger:  log,
-			Verbose: cfg.Log.Verbose,
+			Effort:           cfg.Codex.Effort,
+			CompactionEffort: cfg.Codex.CompactionEffort,
+			Logger:           log,
+			Verbose:          cfg.Log.Verbose,
 		},
 		Kimi: provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)

@@ -27,13 +27,14 @@ type FileConfig struct {
 }
 
 type CodexConfig struct {
-	Originator     string `json:"originator,omitempty"`
-	UserAgent      string `json:"userAgent,omitempty"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	ServiceTier    string `json:"serviceTier,omitempty"`
-	BaseURL        string `json:"baseUrl,omitempty"`
-	InputTokensURL string `json:"inputTokensUrl,omitempty"`
+	Originator       string `json:"originator,omitempty"`
+	UserAgent        string `json:"userAgent,omitempty"`
+	Model            string `json:"model,omitempty"`
+	Effort           string `json:"effort,omitempty"`
+	CompactionEffort string `json:"compactionEffort,omitempty"`
+	ServiceTier      string `json:"serviceTier,omitempty"`
+	BaseURL          string `json:"baseUrl,omitempty"`
+	InputTokensURL   string `json:"inputTokensUrl,omitempty"`
 }
 
 type KimiConfig struct {
@@ -114,6 +115,7 @@ func Load(opts LoadOptions) (Config, error) {
 	cfg.Codex.UserAgent = firstSet(env["CCP_CODEX_USER_AGENT"], env["CCP_USER_AGENT"], cfg.Codex.UserAgent)
 	cfg.Codex.Model = firstNonEmpty(env["CCP_CODEX_MODEL"], cfg.Codex.Model)
 	cfg.Codex.Effort = firstNonEmpty(env["CCP_CODEX_EFFORT"], cfg.Codex.Effort)
+	cfg.Codex.CompactionEffort = firstNonEmpty(env["CCP_CODEX_COMPACTION_EFFORT"], cfg.Codex.CompactionEffort)
 	cfg.Codex.ServiceTier = firstNonEmpty(env["CCP_CODEX_SERVICE_TIER"], cfg.Codex.ServiceTier)
 	cfg.Codex.BaseURL = firstSet(env["CCP_CODEX_BASE_URL"], cfg.Codex.BaseURL)
 	cfg.Codex.InputTokensURL = firstSet(env["CCP_CODEX_INPUT_TOKENS_URL"], cfg.Codex.InputTokensURL)

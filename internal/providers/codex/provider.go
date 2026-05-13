@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -18,10 +19,11 @@ import (
 var unsupportedInputTokenEndpoints sync.Map
 
 type Provider struct {
-	Client  Client
-	Effort  string
-	Logger  *slog.Logger
-	Verbose bool
+	Client           Client
+	Effort           string
+	CompactionEffort string
+	Logger           *slog.Logger
+	Verbose          bool
 }
 
 func (p Provider) Name() string {
@@ -30,11 +32,27 @@ func (p Provider) Name() string {
 
 func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
 	log := p.logger()
+	effort := p.Effort
+	shape := summarizeRequestShape(call.Request.Raw)
+	if isLikelyCompactionRequest(call.Request, shape) {
+		if compactionEffort := p.compactionEffort(); compactionEffort != "inherit" {
+			effort = compactionEffort
+			log.Info("codex compaction effort applied",
+				"request_id", call.Meta.RequestID,
+				"effort", effort,
+				"requested_effort", shape.OutputEffort,
+				"raw_bytes", shape.RawBytes,
+				"message_count", shape.MessageCount,
+				"tool_count", shape.ToolCount,
+				"max_tokens", shape.MaxTokens,
+			)
+		}
+	}
 	body, err := translate.Translate(call.Request, translate.Options{
 		SessionID:   call.Meta.SessionID,
 		ServiceTier: call.Route.ServiceTier,
 		Model:       call.Route.UpstreamModel,
-		Effort:      p.Effort,
+		Effort:      effort,
 	})
 	if err != nil {
 		return err
@@ -134,6 +152,56 @@ func (p Provider) logger() *slog.Logger {
 		return p.Logger
 	}
 	return slog.Default()
+}
+
+type requestShape struct {
+	RawBytes     int
+	MessageCount int
+	ToolCount    int
+	OutputEffort string
+	Stream       *bool
+	MaxTokens    int
+}
+
+func summarizeRequestShape(raw json.RawMessage) requestShape {
+	var decoded struct {
+		Messages     []json.RawMessage `json:"messages"`
+		Tools        []json.RawMessage `json:"tools"`
+		OutputConfig struct {
+			Effort string `json:"effort"`
+		} `json:"output_config"`
+		Stream    *bool `json:"stream"`
+		MaxTokens *int  `json:"max_tokens"`
+	}
+	_ = json.Unmarshal(raw, &decoded)
+	shape := requestShape{
+		RawBytes:     len(raw),
+		MessageCount: len(decoded.Messages),
+		ToolCount:    len(decoded.Tools),
+		OutputEffort: decoded.OutputConfig.Effort,
+		Stream:       decoded.Stream,
+	}
+	if decoded.MaxTokens != nil {
+		shape.MaxTokens = *decoded.MaxTokens
+	}
+	return shape
+}
+
+func isLikelyCompactionRequest(req provider.AnthropicMessagesRequest, shape requestShape) bool {
+	if req.WantsStream() {
+		return false
+	}
+	return shape.RawBytes >= 200_000 &&
+		shape.MessageCount >= 10 &&
+		shape.ToolCount <= 3 &&
+		shape.MaxTokens >= 10_000
+}
+
+func (p Provider) compactionEffort() string {
+	if p.CompactionEffort != "" {
+		return p.CompactionEffort
+	}
+	return "medium"
 }
 
 func reasoningEffort(r *translate.Reasoning) string {
