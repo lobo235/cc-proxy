@@ -25,13 +25,26 @@ type upstreamStreamEvent struct {
 	Type        string `json:"type"`
 	OutputIndex int    `json:"output_index"`
 	Delta       string `json:"delta"`
+	ItemID      string `json:"item_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Arguments   string `json:"arguments,omitempty"`
 	Item        struct {
-		Type string `json:"type"`
-		ID   string `json:"id,omitempty"`
+		Type      string `json:"type"`
+		ID        string `json:"id,omitempty"`
+		CallID    string `json:"call_id,omitempty"`
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
 	} `json:"item,omitempty"`
 	Response struct {
 		Usage codexUsage `json:"usage,omitempty"`
 	} `json:"response,omitempty"`
+}
+
+type downstreamBlock struct {
+	Index       int
+	Kind        string
+	Arguments   string
+	ArgumentsOK bool
 }
 
 func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) error {
@@ -41,8 +54,9 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 	}
 	messageStarted := false
 	nextIndex := 0
-	blocks := map[int]int{}
+	blocks := map[int]downstreamBlock{}
 	var usage *codexUsage
+	stopReason := "end_turn"
 	emit := func(event string, data any) error {
 		encoded, err := sse.EncodeEvent(event, data)
 		if err != nil {
@@ -93,41 +107,91 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		}
 		switch typ {
 		case "response.output_item.added":
-			if payload.Item.Type != "message" {
-				continue
-			}
-			if err := ensureMessageStart(); err != nil {
-				return err
-			}
-			idx := nextIndex
-			nextIndex++
-			blocks[payload.OutputIndex] = idx
-			if err := emit("content_block_start", map[string]any{
-				"type":          "content_block_start",
-				"index":         idx,
-				"content_block": map[string]string{"type": "text", "text": ""},
-			}); err != nil {
-				return err
+			switch payload.Item.Type {
+			case "message":
+				if err := ensureMessageStart(); err != nil {
+					return err
+				}
+				idx := nextIndex
+				nextIndex++
+				blocks[payload.OutputIndex] = downstreamBlock{Index: idx, Kind: "text"}
+				if err := emit("content_block_start", map[string]any{
+					"type":          "content_block_start",
+					"index":         idx,
+					"content_block": map[string]string{"type": "text", "text": ""},
+				}); err != nil {
+					return err
+				}
+			case "function_call":
+				if err := ensureMessageStart(); err != nil {
+					return err
+				}
+				idx := nextIndex
+				nextIndex++
+				stopReason = "tool_use"
+				blocks[payload.OutputIndex] = downstreamBlock{Index: idx, Kind: "tool_use"}
+				if err := emit("content_block_start", map[string]any{
+					"type":  "content_block_start",
+					"index": idx,
+					"content_block": map[string]any{
+						"type":  "tool_use",
+						"id":    toolUseID(payload.Item.CallID, payload.Item.ID),
+						"name":  payload.Item.Name,
+						"input": map[string]any{},
+					},
+				}); err != nil {
+					return err
+				}
 			}
 		case "response.output_text.delta":
-			idx, ok := blocks[payload.OutputIndex]
-			if !ok || payload.Delta == "" {
+			block, ok := blocks[payload.OutputIndex]
+			if !ok || block.Kind != "text" || payload.Delta == "" {
 				continue
 			}
 			if err := emit("content_block_delta", map[string]any{
 				"type":  "content_block_delta",
-				"index": idx,
+				"index": block.Index,
 				"delta": map[string]string{"type": "text_delta", "text": payload.Delta},
 			}); err != nil {
 				return err
 			}
+		case "response.function_call_arguments.delta":
+			block, ok := blocks[payload.OutputIndex]
+			if !ok || block.Kind != "tool_use" || payload.Delta == "" {
+				continue
+			}
+			block.Arguments += payload.Delta
+			block.ArgumentsOK = true
+			blocks[payload.OutputIndex] = block
+			if err := emit("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": block.Index,
+				"delta": map[string]string{"type": "input_json_delta", "partial_json": payload.Delta},
+			}); err != nil {
+				return err
+			}
+		case "response.function_call_arguments.done":
+			block, ok := blocks[payload.OutputIndex]
+			if !ok || block.Kind != "tool_use" || block.ArgumentsOK || payload.Arguments == "" {
+				continue
+			}
+			block.Arguments = payload.Arguments
+			block.ArgumentsOK = true
+			blocks[payload.OutputIndex] = block
+			if err := emit("content_block_delta", map[string]any{
+				"type":  "content_block_delta",
+				"index": block.Index,
+				"delta": map[string]string{"type": "input_json_delta", "partial_json": payload.Arguments},
+			}); err != nil {
+				return err
+			}
 		case "response.output_item.done":
-			idx, ok := blocks[payload.OutputIndex]
+			block, ok := blocks[payload.OutputIndex]
 			if !ok {
 				continue
 			}
 			delete(blocks, payload.OutputIndex)
-			if err := emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": idx}); err != nil {
+			if err := emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": block.Index}); err != nil {
 				return err
 			}
 		case "response.completed":
@@ -148,12 +212,22 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 	}
 	if err := emit("message_delta", map[string]any{
 		"type":  "message_delta",
-		"delta": map[string]any{"stop_reason": "end_turn", "stop_sequence": nil},
+		"delta": map[string]any{"stop_reason": stopReason, "stop_sequence": nil},
 		"usage": mapUsageToAnthropic(usage),
 	}); err != nil {
 		return fmt.Errorf("emitting message delta: %w", err)
 	}
 	return emit("message_stop", map[string]string{"type": "message_stop"})
+}
+
+func toolUseID(callID, fallback string) string {
+	if callID != "" {
+		return callID
+	}
+	if fallback != "" {
+		return fallback
+	}
+	return "toolu_ccp"
 }
 
 func mapUsageToAnthropic(u *codexUsage) map[string]int {

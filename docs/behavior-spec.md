@@ -210,6 +210,20 @@ Provider SSE is reduced to Anthropic Messages SSE:
 - `message_delta`
 - `message_stop`
 
+Codex text output items become Anthropic `text` content blocks.
+
+Codex `function_call` output items become Anthropic `tool_use` content blocks:
+
+- `call_id` is preferred for the Anthropic tool-use `id`; item `id` is the
+  fallback.
+- `name` is forwarded as the tool name.
+- Arguments stream through `response.function_call_arguments.delta` as
+  `input_json_delta.partial_json`.
+- If Codex only provides finalized arguments, the finalized JSON string is
+  emitted as one `input_json_delta`.
+- Any emitted `tool_use` block makes final `message_delta.stop_reason`
+  `tool_use`.
+
 For non-streaming Anthropic requests, the upstream stream is accumulated into a
 single Anthropic JSON response.
 
@@ -263,5 +277,7 @@ Logs are mirrored to stderr when `CCP_LOG_STDERR` is set.
 
 - Codex image blocks nested inside tool results are omitted.
 - Codex reasoning blocks are dropped.
+- Codex built-in tool streams such as file search and code interpreter are not
+  translated yet.
 - Kimi reasoning blocks are forwarded as thinking.
 - Session title/background requests are forwarded upstream.

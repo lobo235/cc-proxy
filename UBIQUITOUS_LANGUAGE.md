@@ -14,6 +14,8 @@
 | **Capability status** | A machine-readable snapshot of routes and **Provider** capabilities exposed by the **Proxy**. | health check, readiness blob |
 | **Behavior spec** | The implementation guide derived from the upstream MIT project's observed source behavior. | clean-room spec, ADR |
 | **Reasoning effort** | The request or config hint that controls how much upstream reasoning work a **Provider** performs before visible output. | thinking level, compute level |
+| **Stream content block** | One Anthropic Messages SSE output block emitted by the **Proxy**, such as visible text or a tool request. | stream chunk, output item |
+| **Tool-use block** | A **Stream content block** that tells Claude Code to execute a named tool with JSON input. | function call, tool call |
 
 ## Relationships
 
@@ -24,6 +26,8 @@
 - A **Provider auth record** belongs to exactly one **Provider**.
 - **Capability status** describes what the **Proxy** can do right now; it is
   more detailed than `/healthz`, which only reports process liveness.
+- A **Tool-use block** is the Anthropic-facing form of a provider-side function
+  call. The provider's argument deltas become `input_json_delta` events.
 
 ## Example Dialogue
 
@@ -55,3 +59,5 @@
   liveness and **Capability status** for feature readiness.
 - "Max" and "xhigh" are not separate internal levels. Use `max` only for the
   Claude-facing alias and `xhigh` for the Codex upstream **Reasoning effort**.
+- "Function call" is provider terminology. Use **Tool-use block** when
+  discussing the Anthropic-facing stream emitted to Claude Code.

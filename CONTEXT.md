@@ -23,6 +23,10 @@ as Codex or Kimi.
   routes, provider readiness, and known partial implementations.
 - **Reasoning effort**: the request or config hint that controls how much
   upstream reasoning work Codex performs before producing visible output.
+- **Stream content block**: one Anthropic Messages SSE output block, currently
+  translated from provider text output or function-call output.
+- **Tool-use block**: a stream content block that asks Claude Code to execute a
+  named tool with streamed JSON input.
 
 ## Attribution
 

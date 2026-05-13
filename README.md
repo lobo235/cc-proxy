@@ -25,7 +25,8 @@ Early public implementation. Implemented so far:
 - Codex request translation for text, system prompts, tools, tool calls, and
   tool results.
 - Codex `/v1/messages/count_tokens` support with a local estimate.
-- Initial Codex text-stream translation path for `/v1/messages`.
+- Initial Codex text and function-call stream translation path for
+  `/v1/messages`.
 - Kimi routes and richer Codex streaming behavior are still in progress.
 - Behavior spec in [docs/behavior-spec.md](docs/behavior-spec.md).
 
