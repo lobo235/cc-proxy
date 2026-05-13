@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/lobo235/cc-proxy/internal/authcli"
+	"github.com/lobo235/cc-proxy/internal/authstore"
 	"github.com/lobo235/cc-proxy/internal/config"
 	"github.com/lobo235/cc-proxy/internal/modelregistry"
 	"github.com/lobo235/cc-proxy/internal/provider"
@@ -54,8 +55,14 @@ func serve() error {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	s := server.New(cfg, server.Providers{
-		Codex: codexprovider.Provider{},
-		Kimi:  provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
+		Codex: codexprovider.Provider{Client: codexprovider.Client{
+			BaseURL:    cfg.Codex.BaseURL,
+			AuthStore:  authstore.New(nil, ""),
+			Originator: cfg.Codex.Originator,
+			UserAgent:  cfg.Codex.UserAgent,
+			Version:    version,
+		}},
+		Kimi: provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

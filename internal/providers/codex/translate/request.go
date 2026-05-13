@@ -13,6 +13,7 @@ import (
 type Options struct {
 	SessionID   string
 	ServiceTier string
+	Model       string
 }
 
 type ResponsesRequest struct {
@@ -158,6 +159,9 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	}
 	if opts.SessionID != "" {
 		out.PromptCacheKey = opts.SessionID
+	}
+	if opts.Model != "" {
+		out.Model = opts.Model
 	}
 	if opts.ServiceTier != "" {
 		out.ServiceTier = opts.ServiceTier

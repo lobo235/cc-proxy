@@ -2,19 +2,48 @@ package codex
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 
 	"github.com/lobo235/cc-proxy/internal/provider"
 	"github.com/lobo235/cc-proxy/internal/providers/codex/translate"
 )
 
-type Provider struct{}
+type Provider struct {
+	Client Client
+}
 
 func (p Provider) Name() string {
 	return string(provider.NameCodex)
 }
 
-func (p Provider) Messages(context.Context, provider.MessagesCall, provider.MessagesOut) error {
-	return provider.ErrNotImplemented{Provider: p.Name(), Operation: "messages"}
+func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
+	body, err := translate.Translate(call.Request, translate.Options{
+		SessionID:   call.Meta.SessionID,
+		ServiceTier: call.Route.ServiceTier,
+		Model:       call.Route.UpstreamModel,
+	})
+	if err != nil {
+		return err
+	}
+	resp, err := p.Client.PostResponses(ctx, body, call.Meta)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("codex upstream returned %d", resp.StatusCode)
+	}
+	header := http.Header{}
+	header.Set("content-type", "text/event-stream")
+	writer, err := out.StartStream(http.StatusOK, header)
+	if err != nil {
+		return err
+	}
+	return translate.TranslateStream(resp.Body, writer, translate.StreamOptions{
+		MessageID: "msg_" + call.Meta.RequestID,
+		Model:     call.Route.IncomingModel,
+	})
 }
 
 func (p Provider) CountTokens(_ context.Context, call provider.CountTokensCall) (provider.CountTokensResponse, error) {
