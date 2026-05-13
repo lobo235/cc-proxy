@@ -16,6 +16,7 @@ attribution and MIT license compliance. See [NOTICE](NOTICE).
 Early public implementation. Implemented so far:
 
 - CLI with `serve`, `--version`, `auth status`, and `auth logout`.
+- Codex device auth via `cc-proxy codex auth device`.
 - Config loading from env and `config.json`.
 - Model/provider routing rules.
 - HTTP routes for `/healthz`, `/status`, `/v1/messages`, and
@@ -34,11 +35,21 @@ Early public implementation. Implemented so far:
 make test
 make build
 bin/cc-proxy --version
+bin/cc-proxy codex auth device
+bin/cc-proxy codex auth status
 bin/cc-proxy serve
 curl http://127.0.0.1:18765/status
 ```
 
 Default listen address is `127.0.0.1:18765`.
+
+To smoke-test Claude Code against Codex `gpt-5.5` through the proxy:
+
+```bash
+ANTHROPIC_BASE_URL=http://127.0.0.1:18765 \
+ANTHROPIC_API_KEY=cc-proxy \
+claude -p --model gpt-5.5 "Reply with one short sentence."
+```
 
 ## Attribution
 

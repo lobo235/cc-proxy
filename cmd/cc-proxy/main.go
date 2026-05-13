@@ -15,6 +15,7 @@ import (
 	"github.com/lobo235/cc-proxy/internal/modelregistry"
 	"github.com/lobo235/cc-proxy/internal/provider"
 	codexprovider "github.com/lobo235/cc-proxy/internal/providers/codex"
+	codexauth "github.com/lobo235/cc-proxy/internal/providers/codex/auth"
 	"github.com/lobo235/cc-proxy/internal/server"
 )
 
@@ -82,8 +83,25 @@ func runProviderCommand(name string, args []string) error {
 		return fmt.Errorf("invalid %s command", name)
 	}
 	switch args[1] {
-	case "login", "device":
-		return fmt.Errorf("%s auth %s not implemented yet", name, args[1])
+	case "login":
+		if name == "codex" {
+			fmt.Fprintln(os.Stderr, "codex browser login is not implemented yet; using device login")
+			_, err := codexauth.DeviceLogin(context.Background(), codexauth.DeviceLoginOptions{
+				Store:  authstore.New(nil, ""),
+				Stdout: os.Stdout,
+			})
+			return err
+		}
+		return fmt.Errorf("%s auth login not implemented yet", name)
+	case "device":
+		if name != "codex" {
+			return fmt.Errorf("%s auth device not implemented yet", name)
+		}
+		_, err := codexauth.DeviceLogin(context.Background(), codexauth.DeviceLoginOptions{
+			Store:  authstore.New(nil, ""),
+			Stdout: os.Stdout,
+		})
+		return err
 	case "status":
 		return authcli.Status(name, authcli.Options{Stdout: os.Stdout})
 	case "logout":
