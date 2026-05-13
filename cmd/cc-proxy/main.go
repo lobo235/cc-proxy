@@ -13,6 +13,7 @@ import (
 	"github.com/lobo235/cc-proxy/internal/config"
 	"github.com/lobo235/cc-proxy/internal/modelregistry"
 	"github.com/lobo235/cc-proxy/internal/provider"
+	codexprovider "github.com/lobo235/cc-proxy/internal/providers/codex"
 	"github.com/lobo235/cc-proxy/internal/server"
 )
 
@@ -53,7 +54,7 @@ func serve() error {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	s := server.New(cfg, server.Providers{
-		Codex: provider.NotImplemented{ProviderName: string(modelregistry.ProviderCodex)},
+		Codex: codexprovider.Provider{},
 		Kimi:  provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

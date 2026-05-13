@@ -99,3 +99,30 @@ func TestTranslateToolUseAndToolResult(t *testing.T) {
 		t.Fatalf("function output item = %+v", got.Input[2])
 	}
 }
+
+func TestCountTokensIncludesTextToolsAndImages(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.4",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.4",
+			"system":"follow instructions",
+			"tools":[{"name":"lookup_weather","description":"Look up weather","input_schema":{"type":"object"}}],
+			"messages":[
+				{"role":"user","content":[
+					{"type":"text","text":"hello world"},
+					{"type":"image","source":{"type":"base64","media_type":"image/png","data":"abc"}}
+				]},
+				{"role":"assistant","content":[
+					{"type":"tool_use","id":"toolu_123","name":"lookup_weather","input":{"city":"Denver"}}
+				]}
+			]
+		}`),
+	}
+	got, err := CountTokens(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got < 2000 {
+		t.Fatalf("tokens = %d, want image estimate included", got)
+	}
+}

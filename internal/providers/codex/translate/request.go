@@ -3,7 +3,9 @@ package translate
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/lobo235/cc-proxy/internal/provider"
 )
@@ -118,6 +120,8 @@ type outputFormat struct {
 	Strict *bool           `json:"strict,omitempty"`
 }
 
+const imageTokenEstimate = 2000
+
 func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRequest, error) {
 	anthropic, err := decodeRequest(req)
 	if err != nil {
@@ -161,6 +165,53 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	return out, nil
 }
 
+func CountTokens(req provider.AnthropicMessagesRequest) (int, error) {
+	anthropic, err := decodeRequest(req)
+	if err != nil {
+		return 0, err
+	}
+	total := 0
+	instructions, err := buildInstructions(anthropic.System)
+	if err != nil {
+		return 0, err
+	}
+	total += estimateTokens(instructions)
+	for _, msg := range anthropic.Messages {
+		blocks, err := normalizeContent(msg.Content)
+		if err != nil {
+			return 0, err
+		}
+		for _, block := range blocks {
+			switch block.Type {
+			case "text":
+				total += estimateTokens(block.Text)
+			case "image":
+				total += imageTokenEstimate
+			case "tool_use":
+				total += estimateTokens(block.Name)
+				args := "{}"
+				if len(block.Input) > 0 && string(block.Input) != "null" {
+					args = string(block.Input)
+				}
+				total += estimateTokens(args)
+			case "tool_result":
+				text, err := ToolResultToString(block.Content)
+				if err != nil {
+					return 0, err
+				}
+				total += estimateTokens(text)
+			}
+		}
+	}
+	for _, tool := range anthropic.Tools {
+		total += estimateTokens(tool.Name)
+		total += estimateTokens(tool.Description)
+		total += estimateTokens(string(tool.InputSchema))
+	}
+	total += len(anthropic.Messages) * 4
+	return total, nil
+}
+
 func decodeRequest(req provider.AnthropicMessagesRequest) (anthropicRequest, error) {
 	var decoded anthropicRequest
 	data := req.Raw
@@ -179,6 +230,15 @@ func decodeRequest(req provider.AnthropicMessagesRequest) (anthropicRequest, err
 		}
 	}
 	return decoded, nil
+}
+
+func estimateTokens(text string) int {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return 0
+	}
+	runes := utf8.RuneCountInString(text)
+	return int(math.Ceil(float64(runes) / 4.0))
 }
 
 func buildInput(messages []anthropicMessage) ([]InputItem, error) {
