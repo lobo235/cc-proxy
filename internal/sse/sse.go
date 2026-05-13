@@ -22,23 +22,38 @@ func EncodeEvent(event string, data any) (string, error) {
 }
 
 func ParseAll(r io.Reader) ([]Event, error) {
+	var events []Event
+	err := Parse(r, func(event Event) error {
+		events = append(events, event)
+		return nil
+	})
+	return events, err
+}
+
+func Parse(r io.Reader, handle func(Event) error) error {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	var events []Event
 	var event string
 	var data []string
-	flush := func() {
+	flush := func() error {
 		if event == "" && len(data) == 0 {
-			return
+			return nil
 		}
-		events = append(events, Event{Event: event, Data: strings.Join(data, "\n")})
+		if handle != nil {
+			if err := handle(Event{Event: event, Data: strings.Join(data, "\n")}); err != nil {
+				return err
+			}
+		}
 		event = ""
 		data = nil
+		return nil
 	}
 	for scanner.Scan() {
 		line := strings.TrimSuffix(scanner.Text(), "\r")
 		if line == "" {
-			flush()
+			if err := flush(); err != nil {
+				return err
+			}
 			continue
 		}
 		if strings.HasPrefix(line, ":") {
@@ -56,8 +71,7 @@ func ParseAll(r io.Reader) ([]Event, error) {
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, err
+		return err
 	}
-	flush()
-	return events, nil
+	return flush()
 }

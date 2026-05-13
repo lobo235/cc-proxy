@@ -212,10 +212,6 @@ type downstreamBlock struct {
 }
 
 func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) error {
-	events, err := sse.ParseAll(upstream)
-	if err != nil {
-		return err
-	}
 	messageStarted := false
 	nextIndex := 0
 	blocks := map[int]downstreamBlock{}
@@ -257,13 +253,13 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		return emit("ping", map[string]string{"type": "ping"})
 	}
 
-	for _, evt := range events {
+	if err := sse.Parse(upstream, func(evt sse.Event) error {
 		if evt.Data == "" {
-			continue
+			return nil
 		}
 		var payload upstreamStreamEvent
 		if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
-			continue
+			return nil
 		}
 		typ := payload.Type
 		if typ == "" {
@@ -310,7 +306,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		case "response.output_text.delta":
 			block, ok := blocks[payload.OutputIndex]
 			if !ok || block.Kind != "text" || payload.Delta == "" {
-				continue
+				return nil
 			}
 			if err := emit("content_block_delta", map[string]any{
 				"type":  "content_block_delta",
@@ -322,7 +318,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		case "response.function_call_arguments.delta":
 			block, ok := blocks[payload.OutputIndex]
 			if !ok || block.Kind != "tool_use" || payload.Delta == "" {
-				continue
+				return nil
 			}
 			block.Arguments += payload.Delta
 			block.ArgumentsOK = true
@@ -330,7 +326,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		case "response.function_call_arguments.done":
 			block, ok := blocks[payload.OutputIndex]
 			if !ok || block.Kind != "tool_use" || payload.Arguments == "" {
-				continue
+				return nil
 			}
 			if !block.ArgumentsOK {
 				block.Arguments = payload.Arguments
@@ -340,7 +336,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		case "response.output_item.done":
 			block, ok := blocks[payload.OutputIndex]
 			if !ok {
-				continue
+				return nil
 			}
 			delete(blocks, payload.OutputIndex)
 			if block.Kind == "tool_use" {
@@ -377,6 +373,9 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 				"error": map[string]string{"type": "api_error", "message": "Upstream error"},
 			})
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 	if err := ensureMessageStart(); err != nil {
 		return err

@@ -3,8 +3,11 @@ package translate
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/lobo235/cc-proxy/internal/sse"
 )
@@ -46,6 +49,48 @@ func TestTranslateStreamTextResponse(t *testing.T) {
 		if !strings.Contains(got, want) {
 			t.Fatalf("translated stream missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func TestTranslateStreamEmitsBeforeUpstreamEOF(t *testing.T) {
+	upstreamReader, upstreamWriter := io.Pipe()
+	out := &notifyingWriter{ch: make(chan string, 16)}
+	done := make(chan error, 1)
+	go func() {
+		done <- TranslateStream(upstreamReader, out, StreamOptions{MessageID: "msg_ccp", Model: "gpt-5.5"})
+	}()
+
+	_, err := io.WriteString(upstreamWriter, strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		``,
+		``,
+	}, "\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case chunk := <-out.ch:
+		if !strings.Contains(chunk, "event: message_start") {
+			t.Fatalf("first downstream chunk = %q, want message_start", chunk)
+		}
+	case <-done:
+		t.Fatal("TranslateStream returned before upstream was closed")
+	case <-time.After(time.Second):
+		t.Fatal("TranslateStream did not emit before upstream EOF")
+	}
+
+	if err := upstreamWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TranslateStream did not finish after upstream EOF")
 	}
 }
 
@@ -245,4 +290,16 @@ func TestTranslateStreamReadDropsInvalidPages(t *testing.T) {
 func quoted(value string) string {
 	data, _ := json.Marshal(value)
 	return string(data)
+}
+
+type notifyingWriter struct {
+	mu sync.Mutex
+	ch chan string
+}
+
+func (w *notifyingWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.ch <- string(p)
+	return len(p), nil
 }
