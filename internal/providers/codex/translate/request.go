@@ -34,6 +34,20 @@ type ResponsesRequest struct {
 	ClientMetadata    json.RawMessage `json:"client_metadata,omitempty"`
 }
 
+type InputTokensRequest struct {
+	Model             string          `json:"model"`
+	Instructions      string          `json:"instructions,omitempty"`
+	Input             []InputItem     `json:"input"`
+	Tools             []Tool          `json:"tools,omitempty"`
+	ToolChoice        any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool            `json:"parallel_tool_calls,omitempty"`
+	Reasoning         *Reasoning      `json:"reasoning,omitempty"`
+	ServiceTier       string          `json:"service_tier,omitempty"`
+	PromptCacheKey    string          `json:"prompt_cache_key,omitempty"`
+	Text              TextConfig      `json:"text,omitempty"`
+	ClientMetadata    json.RawMessage `json:"client_metadata,omitempty"`
+}
+
 type InputItem struct {
 	Type      string        `json:"type"`
 	Role      string        `json:"role,omitempty"`
@@ -182,6 +196,22 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		out.ServiceTier = opts.ServiceTier
 	}
 	return out, nil
+}
+
+func InputTokensRequestFromResponses(req ResponsesRequest) InputTokensRequest {
+	return InputTokensRequest{
+		Model:             req.Model,
+		Instructions:      req.Instructions,
+		Input:             req.Input,
+		Tools:             req.Tools,
+		ToolChoice:        req.ToolChoice,
+		ParallelToolCalls: req.ParallelToolCalls,
+		Reasoning:         req.Reasoning,
+		ServiceTier:       req.ServiceTier,
+		PromptCacheKey:    req.PromptCacheKey,
+		Text:              req.Text,
+		ClientMetadata:    req.ClientMetadata,
+	}
 }
 
 func normalizeToolParameters(raw json.RawMessage) (json.RawMessage, error) {

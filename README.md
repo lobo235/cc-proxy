@@ -24,7 +24,8 @@ Early public implementation. Implemented so far:
 - Provider auth file storage compatible with the upstream Linux paths.
 - Codex request translation for text, system prompts, tools, tool calls, and
   tool results.
-- Codex `/v1/messages/count_tokens` support with a local estimate.
+- Codex `/v1/messages/count_tokens` support using the upstream input-token
+  endpoint when available, with a local estimate fallback.
 - Initial Codex text and function-call stream translation path for
   `/v1/messages`.
 - Kimi routes and richer Codex streaming behavior are still in progress.
@@ -56,6 +57,12 @@ Reasoning effort values `none`, `minimal`, `low`, `medium`, `high`, and
 `xhigh` are forwarded to Codex. Claude Code's `max` effort is translated to
 Codex `xhigh`.
 
+Claude Code may internally spawn subagents with Anthropic model names such as
+`claude-sonnet-4-6`. Within a `claude-gpt` session, those alias requests inherit
+the explicit Codex model already used by the session, so subagents continue to
+run against OpenAI even if Claude Code labels the background agent as Sonnet in
+its UI.
+
 For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
 needed and then forwards all arguments to `claude`. It defaults to
 `--model gpt-5.5` unless you pass your own `--model`.
@@ -82,10 +89,20 @@ scripts/cc-proxy-ensure tail
 scripts/cc-proxy-ensure restart
 ```
 
-Default logging records request routing, HTTP status, upstream Codex status, and
-provider errors with request IDs. Set `CCP_LOG_VERBOSE=1` before starting the
-proxy to add redacted request-shape and translation summaries for contract
-debugging.
+Default logging records request routing, HTTP status, upstream Codex status,
+token usage, and provider errors with request IDs. Usage logs include Codex
+input, cached input, output, reasoning, and total token counts when the upstream
+response provides them.
+
+Set `CCP_LOG_VERBOSE=1` before starting the proxy to add redacted request-shape
+and translation summaries, selected upstream response headers, and
+`count_tokens` fallback details for contract debugging.
+
+`/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
+the configured responses URL by appending `/input_tokens`. Override it with
+`CCP_CODEX_INPUT_TOKENS_URL` if the backend exposes token counting at a
+different path. If the upstream endpoint is missing or rejects the request, the
+proxy falls back to its local estimator and logs `source=estimate`.
 
 ## Attribution
 

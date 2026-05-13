@@ -34,6 +34,117 @@ func TestProviderCountTokensUsesTranslatorCounter(t *testing.T) {
 	}
 }
 
+func TestProviderCountTokensUsesUpstreamInputTokensWhenAvailable(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var gotPath string
+	var gotModel string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		var body struct {
+			Model  string `json:"model"`
+			Stream *bool  `json:"stream"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		gotModel = body.Model
+		if body.Stream != nil {
+			t.Fatal("input token request should not include stream")
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write([]byte(`{"object":"response.input_tokens","input_tokens":42}`))
+	}))
+	defer upstream.Close()
+
+	p := Provider{Client: Client{BaseURL: upstream.URL + "/responses", AuthStore: store}}
+	resp, err := p.CountTokens(context.Background(), provider.CountTokensCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello world"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123", SessionID: "sess-1"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.InputTokens != 42 {
+		t.Fatalf("input tokens = %d, want 42", resp.InputTokens)
+	}
+	if gotPath != "/responses/input_tokens" {
+		t.Fatalf("path = %q, want /responses/input_tokens", gotPath)
+	}
+	if gotModel != "gpt-5.5" {
+		t.Fatalf("model = %q, want gpt-5.5", gotModel)
+	}
+}
+
+func TestProviderCountTokensFallsBackWhenUpstreamUnsupported(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	p := Provider{Client: Client{BaseURL: upstream.URL + "/responses", AuthStore: store}}
+	resp, err := p.CountTokens(context.Background(), provider.CountTokensCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello world"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.InputTokens <= 0 || resp.InputTokens == 42 {
+		t.Fatalf("input tokens = %d, want positive fallback estimate", resp.InputTokens)
+	}
+}
+
+func TestProviderCountTokensSkipsEndpointAfterNotFound(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	p := Provider{Client: Client{BaseURL: upstream.URL + "/responses", AuthStore: store}, Verbose: true}
+	call := provider.CountTokensCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello world"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}
+	if _, err := p.CountTokens(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	call.Meta.RequestID = "req_456"
+	if _, err := p.CountTokens(context.Background(), call); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1", calls)
+	}
+}
+
 func TestProviderMessagesTranslatesUpstreamTextStream(t *testing.T) {
 	home := t.TempDir()
 	store := authstore.New(map[string]string{}, home)
@@ -62,8 +173,9 @@ func TestProviderMessagesTranslatesUpstreamTextStream(t *testing.T) {
 	out := &recordingOut{}
 	err := p.Messages(context.Background(), provider.MessagesCall{
 		Request: provider.AnthropicMessagesRequest{
-			Model: "sonnet",
-			Raw:   json.RawMessage(`{"model":"sonnet","messages":[{"role":"user","content":"hello"}]}`),
+			Model:  "sonnet",
+			Stream: boolPtr(true),
+			Raw:    json.RawMessage(`{"model":"sonnet","messages":[{"role":"user","content":"hello"}],"stream":true}`),
 		},
 		Route: provider.Route{IncomingModel: "sonnet", UpstreamModel: "gpt-5.4"},
 		Meta:  provider.CallMeta{RequestID: "req_123", SessionID: "sess-1"},
@@ -78,8 +190,63 @@ func TestProviderMessagesTranslatesUpstreamTextStream(t *testing.T) {
 	if !strings.Contains(got, "event: message_start") || !strings.Contains(got, `"text":"Hello"`) {
 		t.Fatalf("stream = %s", got)
 	}
-	if !strings.Contains(got, `"model":"sonnet"`) {
-		t.Fatalf("stream model should use incoming model: %s", got)
+	if !strings.Contains(got, `"model":"gpt-5.4"`) {
+		t.Fatalf("stream model should use upstream model: %s", got)
+	}
+}
+
+func TestProviderMessagesTranslatesUpstreamTextNonStream(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`event: response.output_item.added`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","output_index":0,"delta":"Hello"}`,
+			``,
+			`event: response.output_item.done`,
+			`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"usage":{"input_tokens":9,"output_tokens":1}}}`,
+			``,
+		}, "\n")))
+	}))
+	defer upstream.Close()
+	p := Provider{Client: Client{BaseURL: upstream.URL, AuthStore: store}}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}]}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123", SessionID: "sess-1"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", out.status)
+	}
+	got := out.body.String()
+	for _, want := range []string{
+		`"type":"message"`,
+		`"model":"gpt-5.5"`,
+		`"type":"text"`,
+		`"text":"Hello"`,
+		`"input_tokens":9`,
+		`"output_tokens":1`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("response missing %s:\n%s", want, got)
+		}
 	}
 }
 
@@ -125,6 +292,10 @@ func TestProviderMessagesAppliesEffortOverride(t *testing.T) {
 	if !containsString(captured.Include, "reasoning.encrypted_content") {
 		t.Fatalf("include = %+v, want reasoning.encrypted_content", captured.Include)
 	}
+}
+
+func boolPtr(v bool) *bool {
+	return &v
 }
 
 func TestProviderMessagesLogsUpstreamResponse(t *testing.T) {

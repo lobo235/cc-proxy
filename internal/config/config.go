@@ -27,12 +27,13 @@ type FileConfig struct {
 }
 
 type CodexConfig struct {
-	Originator  string `json:"originator,omitempty"`
-	UserAgent   string `json:"userAgent,omitempty"`
-	Model       string `json:"model,omitempty"`
-	Effort      string `json:"effort,omitempty"`
-	ServiceTier string `json:"serviceTier,omitempty"`
-	BaseURL     string `json:"baseUrl,omitempty"`
+	Originator     string `json:"originator,omitempty"`
+	UserAgent      string `json:"userAgent,omitempty"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	ServiceTier    string `json:"serviceTier,omitempty"`
+	BaseURL        string `json:"baseUrl,omitempty"`
+	InputTokensURL string `json:"inputTokensUrl,omitempty"`
 }
 
 type KimiConfig struct {
@@ -115,6 +116,7 @@ func Load(opts LoadOptions) (Config, error) {
 	cfg.Codex.Effort = firstNonEmpty(env["CCP_CODEX_EFFORT"], cfg.Codex.Effort)
 	cfg.Codex.ServiceTier = firstNonEmpty(env["CCP_CODEX_SERVICE_TIER"], cfg.Codex.ServiceTier)
 	cfg.Codex.BaseURL = firstSet(env["CCP_CODEX_BASE_URL"], cfg.Codex.BaseURL)
+	cfg.Codex.InputTokensURL = firstSet(env["CCP_CODEX_INPUT_TOKENS_URL"], cfg.Codex.InputTokensURL)
 
 	cfg.Kimi.UserAgent = firstSet(env["CCP_KIMI_USER_AGENT"], env["CCP_USER_AGENT"], cfg.Kimi.UserAgent)
 	cfg.Kimi.OAuthHost = firstSet(env["CCP_KIMI_OAUTH_HOST"], cfg.Kimi.OAuthHost)

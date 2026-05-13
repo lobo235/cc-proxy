@@ -65,11 +65,12 @@ func serve() error {
 	s := server.New(cfg, server.Providers{
 		Codex: codexprovider.Provider{
 			Client: codexprovider.Client{
-				BaseURL:    cfg.Codex.BaseURL,
-				AuthStore:  authstore.New(nil, ""),
-				Originator: cfg.Codex.Originator,
-				UserAgent:  cfg.Codex.UserAgent,
-				Version:    version,
+				BaseURL:        cfg.Codex.BaseURL,
+				InputTokensURL: cfg.Codex.InputTokensURL,
+				AuthStore:      authstore.New(nil, ""),
+				Originator:     cfg.Codex.Originator,
+				UserAgent:      cfg.Codex.UserAgent,
+				Version:        version,
 			},
 			Effort:  cfg.Codex.Effort,
 			Logger:  log,

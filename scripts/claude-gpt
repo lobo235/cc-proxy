@@ -9,17 +9,29 @@ BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
 MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5}"
 
-"$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
-
 has_model=0
-for arg in "$@"; do
+REQUESTED_MODEL="$MODEL"
+args=("$@")
+for i in "${!args[@]}"; do
+	arg="${args[$i]}"
 	case "$arg" in
-		--model | --model=*)
+		--model)
 			has_model=1
+			next_index=$((i + 1))
+			if [[ "$next_index" -lt "${#args[@]}" ]]; then
+				REQUESTED_MODEL="${args[$next_index]}"
+			fi
+			break
+			;;
+		--model=*)
+			has_model=1
+			REQUESTED_MODEL="${arg#--model=}"
 			break
 			;;
 	esac
 done
+
+CCP_CODEX_MODEL="${CCP_CODEX_MODEL:-$REQUESTED_MODEL}" "$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
 
 if [[ "$has_model" -eq 1 ]]; then
 	exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude "$@"

@@ -41,6 +41,8 @@ type sessionState struct {
 	Seq              int
 	AffinityProvider config.AliasProvider
 	HasAffinity      bool
+	CodexModel       string
+	CodexServiceTier string
 	LastSeen         time.Time
 }
 
@@ -266,6 +268,7 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 		writeError(w, http.StatusBadRequest, "invalid_request_error", fmt.Sprintf("Unknown model %q. %s", req.Model, modelregistry.SupportedMessage(s.cfg.AliasProvider)))
 		return nil, routedCall{}, false
 	}
+	resolved = s.applyCodexAliasPreference(req.Model, resolved, session)
 	current := s.recordSessionRequest(sessionID, session, resolved.Provider, req.Model, now)
 	meta := provider.CallMeta{
 		RequestID:  randomID(),
@@ -305,6 +308,22 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 	}
 }
 
+func (s *Server) applyCodexAliasPreference(model string, resolved modelregistry.Resolved, session *sessionState) modelregistry.Resolved {
+	if !isAnthropicAlias(model) || resolved.Provider != modelregistry.ProviderCodex {
+		return resolved
+	}
+	if session != nil && session.CodexModel != "" {
+		resolved.Model = session.CodexModel
+		resolved.ServiceTier = session.CodexServiceTier
+		return resolved
+	}
+	if s.cfg.Codex.Model != "" {
+		resolved.Model = s.cfg.Codex.Model
+		resolved.ServiceTier = s.cfg.Codex.ServiceTier
+	}
+	return resolved
+}
+
 func (s *Server) existingSession(sessionID string, now time.Time) *sessionState {
 	if sessionID == "" {
 		return nil
@@ -334,6 +353,11 @@ func (s *Server) recordSessionRequest(sessionID string, session *sessionState, p
 		if providerName == modelregistry.ProviderCodex {
 			state.AffinityProvider = config.AliasProviderCodex
 			state.HasAffinity = true
+			resolved, ok := modelregistry.Resolve(model, config.AliasProviderCodex)
+			if ok && resolved.Provider == modelregistry.ProviderCodex {
+				state.CodexModel = resolved.Model
+				state.CodexServiceTier = resolved.ServiceTier
+			}
 		}
 		if providerName == modelregistry.ProviderKimi {
 			state.AffinityProvider = config.AliasProviderKimi

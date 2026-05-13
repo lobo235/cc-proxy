@@ -148,6 +148,61 @@ func TestMessagesRoutesCallToProviderSink(t *testing.T) {
 	}
 }
 
+func TestAnthropicAliasInheritsExplicitCodexModelWithinSession(t *testing.T) {
+	fp := &fakeProvider{name: "codex"}
+	s := New(config.Config{Port: 18765, AliasProvider: config.AliasProviderCodex}, Providers{
+		Codex: fp,
+		Kimi:  &fakeProvider{name: "kimi"},
+	}, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.5","messages":[]}`))
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("first status = %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-6","messages":[]}`))
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec = httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("second status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fp.lastMessage.Route.IncomingModel != "claude-sonnet-4-6" {
+		t.Fatalf("incoming model = %q, want claude-sonnet-4-6", fp.lastMessage.Route.IncomingModel)
+	}
+	if fp.lastMessage.Route.UpstreamModel != "gpt-5.5" {
+		t.Fatalf("upstream model = %q, want session gpt-5.5", fp.lastMessage.Route.UpstreamModel)
+	}
+	if fp.lastMessage.Meta.SessionSeq != 2 {
+		t.Fatalf("session seq = %d, want 2", fp.lastMessage.Meta.SessionSeq)
+	}
+}
+
+func TestAnthropicAliasUsesConfiguredCodexModelWithoutSessionPreference(t *testing.T) {
+	fp := &fakeProvider{name: "codex"}
+	s := New(config.Config{
+		Port:          18765,
+		AliasProvider: config.AliasProviderCodex,
+		Codex:         config.CodexConfig{Model: "gpt-5.5"},
+	}, Providers{
+		Codex: fp,
+		Kimi:  &fakeProvider{name: "kimi"},
+	}, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-sonnet-4-6","messages":[]}`))
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	s.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body=%s", rec.Code, rec.Body.String())
+	}
+	if fp.lastMessage.Route.UpstreamModel != "gpt-5.5" {
+		t.Fatalf("upstream model = %q, want configured gpt-5.5", fp.lastMessage.Route.UpstreamModel)
+	}
+}
+
 func TestMessagesLogsRoutingAndHTTPRequest(t *testing.T) {
 	var logs bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logs, nil))

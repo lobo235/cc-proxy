@@ -1,9 +1,11 @@
 package translate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/lobo235/cc-proxy/internal/sse"
 )
@@ -11,14 +13,19 @@ import (
 type StreamOptions struct {
 	MessageID string
 	Model     string
+	OnUsage   func(Usage)
 }
 
-type codexUsage struct {
+type Usage struct {
 	InputTokens        int `json:"input_tokens,omitempty"`
 	OutputTokens       int `json:"output_tokens,omitempty"`
+	TotalTokens        int `json:"total_tokens,omitempty"`
 	InputTokensDetails struct {
 		CachedTokens int `json:"cached_tokens,omitempty"`
 	} `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	} `json:"output_tokens_details,omitempty"`
 }
 
 type upstreamStreamEvent struct {
@@ -36,8 +43,161 @@ type upstreamStreamEvent struct {
 		Arguments string `json:"arguments,omitempty"`
 	} `json:"item,omitempty"`
 	Response struct {
-		Usage codexUsage `json:"usage,omitempty"`
+		Usage Usage `json:"usage,omitempty"`
 	} `json:"response,omitempty"`
+}
+
+func TranslateResponse(upstream io.Reader, opts StreamOptions) (map[string]any, error) {
+	var stream bytes.Buffer
+	if err := TranslateStream(upstream, &stream, opts); err != nil {
+		return nil, err
+	}
+	events, err := sse.ParseAll(bytes.NewReader(stream.Bytes()))
+	if err != nil {
+		return nil, err
+	}
+	return collectResponse(events)
+}
+
+type collectedBlock struct {
+	Index     int
+	Kind      string
+	Text      string
+	ID        string
+	Name      string
+	Arguments string
+}
+
+func collectResponse(events []sse.Event) (map[string]any, error) {
+	message := map[string]any{
+		"id":            "msg_ccp",
+		"type":          "message",
+		"role":          "assistant",
+		"model":         "",
+		"content":       []any{},
+		"stop_reason":   "end_turn",
+		"stop_sequence": nil,
+		"usage":         mapUsageToAnthropic(nil),
+	}
+	blocks := map[int]*collectedBlock{}
+	for _, evt := range events {
+		if evt.Data == "" {
+			continue
+		}
+		switch evt.Event {
+		case "message_start":
+			var payload struct {
+				Message map[string]any `json:"message"`
+			}
+			if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+				return nil, err
+			}
+			for k, v := range payload.Message {
+				message[k] = v
+			}
+		case "content_block_start":
+			var payload struct {
+				Index        int             `json:"index"`
+				ContentBlock json.RawMessage `json:"content_block"`
+			}
+			if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+				return nil, err
+			}
+			var block struct {
+				Type  string          `json:"type"`
+				Text  string          `json:"text"`
+				ID    string          `json:"id"`
+				Name  string          `json:"name"`
+				Input json.RawMessage `json:"input"`
+			}
+			if err := json.Unmarshal(payload.ContentBlock, &block); err != nil {
+				return nil, err
+			}
+			blocks[payload.Index] = &collectedBlock{
+				Index: payload.Index,
+				Kind:  block.Type,
+				Text:  block.Text,
+				ID:    block.ID,
+				Name:  block.Name,
+			}
+		case "content_block_delta":
+			var payload struct {
+				Index int `json:"index"`
+				Delta struct {
+					Type        string `json:"type"`
+					Text        string `json:"text"`
+					PartialJSON string `json:"partial_json"`
+				} `json:"delta"`
+			}
+			if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+				return nil, err
+			}
+			block := blocks[payload.Index]
+			if block == nil {
+				continue
+			}
+			switch payload.Delta.Type {
+			case "text_delta":
+				block.Text += payload.Delta.Text
+			case "input_json_delta":
+				block.Arguments += payload.Delta.PartialJSON
+			}
+		case "message_delta":
+			var payload struct {
+				Delta struct {
+					StopReason   string `json:"stop_reason"`
+					StopSequence any    `json:"stop_sequence"`
+				} `json:"delta"`
+				Usage map[string]int `json:"usage"`
+			}
+			if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+				return nil, err
+			}
+			if payload.Delta.StopReason != "" {
+				message["stop_reason"] = payload.Delta.StopReason
+			}
+			message["stop_sequence"] = payload.Delta.StopSequence
+			if payload.Usage != nil {
+				message["usage"] = payload.Usage
+			}
+		}
+	}
+	indexes := make([]int, 0, len(blocks))
+	for idx := range blocks {
+		indexes = append(indexes, idx)
+	}
+	sort.Ints(indexes)
+	content := make([]any, 0, len(indexes))
+	for _, idx := range indexes {
+		block := blocks[idx]
+		switch block.Kind {
+		case "text":
+			content = append(content, map[string]any{"type": "text", "text": block.Text})
+		case "tool_use":
+			content = append(content, map[string]any{
+				"type":  "tool_use",
+				"id":    block.ID,
+				"name":  block.Name,
+				"input": decodeToolInput(block.Arguments),
+			})
+		}
+	}
+	message["content"] = content
+	return message, nil
+}
+
+func decodeToolInput(arguments string) any {
+	if arguments == "" {
+		return map[string]any{}
+	}
+	var input any
+	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+		return map[string]any{}
+	}
+	if input == nil {
+		return map[string]any{}
+	}
+	return input
 }
 
 type downstreamBlock struct {
@@ -55,7 +215,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 	messageStarted := false
 	nextIndex := 0
 	blocks := map[int]downstreamBlock{}
-	var usage *codexUsage
+	var usage *Usage
 	stopReason := "end_turn"
 	emit := func(event string, data any) error {
 		encoded, err := sse.EncodeEvent(event, data)
@@ -217,6 +377,9 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 	}); err != nil {
 		return fmt.Errorf("emitting message delta: %w", err)
 	}
+	if opts.OnUsage != nil && usage != nil {
+		opts.OnUsage(*usage)
+	}
 	return emit("message_stop", map[string]string{"type": "message_stop"})
 }
 
@@ -230,7 +393,7 @@ func toolUseID(callID, fallback string) string {
 	return "toolu_ccp"
 }
 
-func mapUsageToAnthropic(u *codexUsage) map[string]int {
+func mapUsageToAnthropic(u *Usage) map[string]int {
 	if u == nil {
 		return map[string]int{
 			"input_tokens":                0,

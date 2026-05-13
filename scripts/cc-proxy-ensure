@@ -8,6 +8,7 @@ HOST="${CC_PROXY_HOST:-127.0.0.1}"
 PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 HEALTH_URL="${BASE_URL%/}/healthz"
+MODEL="${CCP_CODEX_MODEL:-${CLAUDE_GPT_MODEL:-gpt-5.5}}"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/claude-code-proxy"
 LEGACY_STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/cc-proxy"
 PID_FILE="$STATE_DIR/cc-proxy.pid"
@@ -119,7 +120,7 @@ start_proxy() {
 
 	(
 		cd "$REPO_ROOT"
-		PORT="$PORT" nohup setsid "$PROXY_BIN" serve >>"$LAUNCHER_LOG_FILE" 2>&1 </dev/null &
+		PORT="$PORT" CCP_CODEX_MODEL="$MODEL" nohup setsid "$PROXY_BIN" serve >>"$LAUNCHER_LOG_FILE" 2>&1 </dev/null &
 		echo "$!" >"$PID_FILE"
 	)
 

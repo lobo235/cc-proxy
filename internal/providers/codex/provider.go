@@ -2,16 +2,20 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/lobo235/cc-proxy/internal/provider"
 	"github.com/lobo235/cc-proxy/internal/providers/codex/translate"
 )
+
+var unsupportedInputTokenEndpoints sync.Map
 
 type Provider struct {
 	Client  Client
@@ -59,10 +63,42 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 		"duration_ms", time.Since(start).Milliseconds(),
 		"content_type", resp.Header.Get("content-type"),
 	)
+	if p.Verbose {
+		log.Debug("codex upstream response headers",
+			"request_id", call.Meta.RequestID,
+			"headers", selectedResponseHeaders(resp.Header),
+		)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodySnippet := readBodySnippet(resp.Body, 4096)
 		log.Warn("codex upstream rejected", "request_id", call.Meta.RequestID, "status", resp.StatusCode, "body", bodySnippet)
 		return provider.UpstreamError{Provider: "codex", StatusCode: resp.StatusCode, Body: bodySnippet}
+	}
+	if !call.Request.WantsStream() {
+		var usage translate.Usage
+		hasUsage := false
+		message, err := translate.TranslateResponse(resp.Body, translate.StreamOptions{
+			MessageID: "msg_" + call.Meta.RequestID,
+			Model:     call.Route.UpstreamModel,
+			OnUsage: func(u translate.Usage) {
+				usage = u
+				hasUsage = true
+			},
+		})
+		if hasUsage {
+			log.Info("codex usage",
+				"request_id", call.Meta.RequestID,
+				"input_tokens", usage.InputTokens,
+				"cached_input_tokens", usage.InputTokensDetails.CachedTokens,
+				"output_tokens", usage.OutputTokens,
+				"reasoning_tokens", usage.OutputTokensDetails.ReasoningTokens,
+				"total_tokens", usage.TotalTokens,
+			)
+		}
+		if err != nil {
+			return err
+		}
+		return out.WriteJSON(http.StatusOK, http.Header{}, message)
 	}
 	header := http.Header{}
 	header.Set("content-type", "text/event-stream")
@@ -70,10 +106,27 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 	if err != nil {
 		return err
 	}
-	return translate.TranslateStream(resp.Body, writer, translate.StreamOptions{
+	var usage translate.Usage
+	hasUsage := false
+	err = translate.TranslateStream(resp.Body, writer, translate.StreamOptions{
 		MessageID: "msg_" + call.Meta.RequestID,
-		Model:     call.Route.IncomingModel,
+		Model:     call.Route.UpstreamModel,
+		OnUsage: func(u translate.Usage) {
+			usage = u
+			hasUsage = true
+		},
 	})
+	if hasUsage {
+		log.Info("codex usage",
+			"request_id", call.Meta.RequestID,
+			"input_tokens", usage.InputTokens,
+			"cached_input_tokens", usage.InputTokensDetails.CachedTokens,
+			"output_tokens", usage.OutputTokens,
+			"reasoning_tokens", usage.OutputTokensDetails.ReasoningTokens,
+			"total_tokens", usage.TotalTokens,
+		)
+	}
+	return err
 }
 
 func (p Provider) logger() *slog.Logger {
@@ -113,10 +166,80 @@ func containsString(items []string, needle string) bool {
 	return false
 }
 
-func (p Provider) CountTokens(_ context.Context, call provider.CountTokensCall) (provider.CountTokensResponse, error) {
-	count, err := translate.CountTokens(call.Request)
-	if err != nil {
-		return provider.CountTokensResponse{}, err
+func selectedResponseHeaders(header http.Header) map[string]string {
+	out := map[string]string{}
+	for _, name := range []string{
+		"x-request-id",
+		"openai-processing-ms",
+		"retry-after",
+		"x-ratelimit-limit-requests",
+		"x-ratelimit-remaining-requests",
+		"x-ratelimit-reset-requests",
+		"x-ratelimit-limit-tokens",
+		"x-ratelimit-remaining-tokens",
+		"x-ratelimit-reset-tokens",
+	} {
+		if value := header.Get(name); value != "" {
+			out[name] = value
+		}
 	}
-	return provider.CountTokensResponse{InputTokens: count}, nil
+	return out
+}
+
+func (p Provider) CountTokens(ctx context.Context, call provider.CountTokensCall) (provider.CountTokensResponse, error) {
+	log := p.logger()
+	estimate, estimateErr := translate.CountTokens(call.Request)
+	body, translateErr := translate.Translate(call.Request, translate.Options{
+		SessionID:   call.Meta.SessionID,
+		ServiceTier: call.Route.ServiceTier,
+		Model:       call.Route.UpstreamModel,
+		Effort:      p.Effort,
+	})
+	if translateErr == nil {
+		endpoint := p.Client.inputTokensEndpoint()
+		if _, unsupported := unsupportedInputTokenEndpoints.Load(endpoint); !unsupported {
+			start := time.Now()
+			count, err := p.Client.CountInputTokens(ctx, body, call.Meta)
+			if err == nil {
+				log.Info("codex count_tokens",
+					"request_id", call.Meta.RequestID,
+					"source", "upstream",
+					"input_tokens", count,
+					"duration_ms", time.Since(start).Milliseconds(),
+				)
+				return provider.CountTokensResponse{InputTokens: count}, nil
+			}
+			var statusErr InputTokensStatusError
+			if errors.As(err, &statusErr) && statusErr.StatusCode == http.StatusNotFound {
+				unsupportedInputTokenEndpoints.Store(endpoint, true)
+			}
+			if p.Verbose {
+				log.Debug("codex count_tokens upstream unavailable",
+					"request_id", call.Meta.RequestID,
+					"error", err.Error(),
+					"duration_ms", time.Since(start).Milliseconds(),
+				)
+			}
+		} else if p.Verbose {
+			log.Debug("codex count_tokens upstream skipped",
+				"request_id", call.Meta.RequestID,
+				"reason", "input token endpoint previously returned 404",
+			)
+		}
+	}
+	if estimateErr != nil {
+		return provider.CountTokensResponse{}, estimateErr
+	}
+	if p.Verbose && translateErr != nil {
+		log.Debug("codex count_tokens translate unavailable",
+			"request_id", call.Meta.RequestID,
+			"error", translateErr.Error(),
+		)
+	}
+	log.Info("codex count_tokens",
+		"request_id", call.Meta.RequestID,
+		"source", "estimate",
+		"input_tokens", estimate,
+	)
+	return provider.CountTokensResponse{InputTokens: estimate}, nil
 }
