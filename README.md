@@ -67,22 +67,13 @@ For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
 needed and then forwards all arguments to `claude`. It defaults to
 `--model gpt-5.5` unless you pass your own `--model`.
 
-`scripts/claude-gpt` also defaults Claude Code into a lean Codex-oriented
-launch shape:
+`scripts/claude-gpt` preserves the normal Claude Code harness by default, so
+your configured MCP servers, skills, agents, core slash commands, project
+memory, and default tools are available.
 
-- `--bare`, so Claude Code does not auto-load ambient hooks, plugins, memory,
-  or discovered project prompt files.
-- `--strict-mcp-config`, so user/global MCP servers are not advertised unless
-  you explicitly pass a config.
-- `--tools Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite`, a compact
-  built-in tool set for normal coding.
-
-Override those defaults with environment variables when you need a fuller
-Claude Code harness:
+Override launcher defaults with environment variables:
 
 ```bash
-CLAUDE_GPT_BARE=0 scripts/claude-gpt ...
-CLAUDE_GPT_STRICT_MCP_CONFIG=0 scripts/claude-gpt ...
 CLAUDE_GPT_TOOLS=default scripts/claude-gpt ...
 CLAUDE_GPT_TOOLS= scripts/claude-gpt --tools default ...
 CLAUDE_GPT_PROXY_VERBOSE=0 scripts/claude-gpt ...
@@ -95,12 +86,17 @@ default. To disable slash commands for a one-off minimal print-mode request:
 CLAUDE_GPT_DISABLE_SLASH_COMMANDS=1 scripts/claude-gpt -p ...
 ```
 
-To use your normal user/project MCP configuration instead of the lean default,
-disable both bare mode and strict MCP filtering:
+For a one-off small-context session with no ambient MCP/user/project harness,
+enable lean mode:
 
 ```bash
-CLAUDE_GPT_BARE=0 CLAUDE_GPT_STRICT_MCP_CONFIG=0 scripts/claude-gpt ...
+CLAUDE_GPT_LEAN=1 scripts/claude-gpt ...
 ```
+
+Lean mode adds `--bare`, `--strict-mcp-config`, and a compact built-in tool set
+of `Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite`. You can also
+control those flags independently with `CLAUDE_GPT_BARE=1`,
+`CLAUDE_GPT_STRICT_MCP_CONFIG=1`, and `CLAUDE_GPT_TOOLS=...`.
 
 ```bash
 scripts/claude-gpt -p --effort max "Reply with exactly: proxy-ok"
@@ -141,6 +137,21 @@ by default so these diagnostics are available during normal proxy testing. Set
 `CLAUDE_GPT_PROXY_VERBOSE=0` if you want the launcher to start the proxy with
 normal logging instead. If the proxy is already running, restart it with
 `CCP_LOG_VERBOSE=1 scripts/cc-proxy-ensure restart` to turn verbose logging on.
+
+### Context Size
+
+Claude Code sends the active conversation plus the currently available tool
+schemas to the configured Anthropic-compatible endpoint. When your normal MCP
+servers, skills, agents, and project tooling are loaded, those schemas can be a
+large repeated prefix. `cc-proxy` preserves that harness by default because those
+tools are part of the value of Claude Code.
+
+The proxy currently forwards translated Codex requests statelessly
+(`store=false`) with a stable `prompt_cache_key`. That allows OpenAI prompt
+caching to help with repeated prefixes, but it still means the full translated
+input is sent on each turn. A deeper optimization is to add a stateful Responses
+mapping using stored responses and `previous_response_id`, so repeated history
+does not have to be resent by `cc-proxy` after the first turn.
 
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with

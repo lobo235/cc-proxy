@@ -281,6 +281,10 @@ Logs are mirrored to stderr when `CCP_LOG_STDERR` is set.
 
 ## Known Limits
 
+- Codex requests are currently forwarded statelessly with `store: false` and no
+  `previous_response_id`. Claude Code may send full conversation history and
+  tool schemas on each turn; `prompt_cache_key` can improve upstream cache hits
+  but does not reduce the request body sent by `cc-proxy`.
 - Codex image blocks nested inside tool results are omitted.
 - Codex reasoning blocks are dropped.
 - Codex built-in tool streams such as file search and code interpreter are not

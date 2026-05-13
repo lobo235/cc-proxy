@@ -8,7 +8,7 @@ PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
 MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5}"
-DEFAULT_TOOLS="${CLAUDE_GPT_TOOLS-Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite}"
+LEAN_DEFAULT="${CLAUDE_GPT_LEAN:-0}"
 
 is_truthy() {
 	case "${1,,}" in
@@ -16,6 +16,14 @@ is_truthy() {
 		*) return 1 ;;
 	esac
 }
+
+if [[ -n "${CLAUDE_GPT_TOOLS+x}" ]]; then
+	DEFAULT_TOOLS="$CLAUDE_GPT_TOOLS"
+elif is_truthy "$LEAN_DEFAULT"; then
+	DEFAULT_TOOLS="Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite"
+else
+	DEFAULT_TOOLS=""
+fi
 
 has_flag() {
 	local needle="$1"
@@ -51,10 +59,10 @@ for i in "${!args[@]}"; do
 done
 
 claude_args=()
-if is_truthy "${CLAUDE_GPT_BARE:-1}" && ! has_flag "--bare"; then
+if is_truthy "${CLAUDE_GPT_BARE:-$LEAN_DEFAULT}" && ! has_flag "--bare"; then
 	claude_args+=(--bare)
 fi
-if is_truthy "${CLAUDE_GPT_STRICT_MCP_CONFIG:-1}" && ! has_flag "--strict-mcp-config"; then
+if is_truthy "${CLAUDE_GPT_STRICT_MCP_CONFIG:-$LEAN_DEFAULT}" && ! has_flag "--strict-mcp-config"; then
 	claude_args+=(--strict-mcp-config)
 fi
 if is_truthy "${CLAUDE_GPT_DISABLE_SLASH_COMMANDS:-0}" && ! has_flag "--disable-slash-commands"; then
