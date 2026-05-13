@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/lobo235/cc-proxy/internal/sse"
 )
@@ -178,7 +180,7 @@ func collectResponse(events []sse.Event) (map[string]any, error) {
 				"type":  "tool_use",
 				"id":    block.ID,
 				"name":  block.Name,
-				"input": decodeToolInput(block.Arguments),
+				"input": decodeToolInput(block.Name, block.Arguments),
 			})
 		}
 	}
@@ -186,10 +188,11 @@ func collectResponse(events []sse.Event) (map[string]any, error) {
 	return message, nil
 }
 
-func decodeToolInput(arguments string) any {
+func decodeToolInput(name, arguments string) any {
 	if arguments == "" {
 		return map[string]any{}
 	}
+	arguments = sanitizeToolArguments(name, arguments)
 	var input any
 	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
 		return map[string]any{}
@@ -203,6 +206,7 @@ func decodeToolInput(arguments string) any {
 type downstreamBlock struct {
 	Index       int
 	Kind        string
+	Name        string
 	Arguments   string
 	ArgumentsOK bool
 }
@@ -289,7 +293,7 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 				idx := nextIndex
 				nextIndex++
 				stopReason = "tool_use"
-				blocks[payload.OutputIndex] = downstreamBlock{Index: idx, Kind: "tool_use"}
+				blocks[payload.OutputIndex] = downstreamBlock{Index: idx, Kind: "tool_use", Name: payload.Item.Name}
 				if err := emit("content_block_start", map[string]any{
 					"type":  "content_block_start",
 					"index": idx,
@@ -323,34 +327,41 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 			block.Arguments += payload.Delta
 			block.ArgumentsOK = true
 			blocks[payload.OutputIndex] = block
-			if err := emit("content_block_delta", map[string]any{
-				"type":  "content_block_delta",
-				"index": block.Index,
-				"delta": map[string]string{"type": "input_json_delta", "partial_json": payload.Delta},
-			}); err != nil {
-				return err
-			}
 		case "response.function_call_arguments.done":
 			block, ok := blocks[payload.OutputIndex]
-			if !ok || block.Kind != "tool_use" || block.ArgumentsOK || payload.Arguments == "" {
+			if !ok || block.Kind != "tool_use" || payload.Arguments == "" {
 				continue
 			}
-			block.Arguments = payload.Arguments
+			if !block.ArgumentsOK {
+				block.Arguments = payload.Arguments
+			}
 			block.ArgumentsOK = true
 			blocks[payload.OutputIndex] = block
-			if err := emit("content_block_delta", map[string]any{
-				"type":  "content_block_delta",
-				"index": block.Index,
-				"delta": map[string]string{"type": "input_json_delta", "partial_json": payload.Arguments},
-			}); err != nil {
-				return err
-			}
 		case "response.output_item.done":
 			block, ok := blocks[payload.OutputIndex]
 			if !ok {
 				continue
 			}
 			delete(blocks, payload.OutputIndex)
+			if block.Kind == "tool_use" {
+				if block.Name == "" {
+					block.Name = payload.Item.Name
+				}
+				if !block.ArgumentsOK && payload.Item.Arguments != "" {
+					block.Arguments = payload.Item.Arguments
+					block.ArgumentsOK = true
+				}
+				if block.ArgumentsOK {
+					arguments := sanitizeToolArguments(block.Name, block.Arguments)
+					if err := emit("content_block_delta", map[string]any{
+						"type":  "content_block_delta",
+						"index": block.Index,
+						"delta": map[string]string{"type": "input_json_delta", "partial_json": arguments},
+					}); err != nil {
+						return err
+					}
+				}
+			}
 			if err := emit("content_block_stop", map[string]any{"type": "content_block_stop", "index": block.Index}); err != nil {
 				return err
 			}
@@ -391,6 +402,48 @@ func toolUseID(callID, fallback string) string {
 		return fallback
 	}
 	return "toolu_ccp"
+}
+
+func sanitizeToolArguments(name, arguments string) string {
+	if arguments == "" {
+		return arguments
+	}
+	var input map[string]any
+	if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+		return arguments
+	}
+	if name == "Read" {
+		sanitizeReadArguments(input)
+	}
+	out, err := json.Marshal(input)
+	if err != nil {
+		return arguments
+	}
+	return string(out)
+}
+
+func sanitizeReadArguments(input map[string]any) {
+	pages, ok := input["pages"]
+	if !ok {
+		return
+	}
+	path, _ := input["file_path"].(string)
+	if strings.ToLower(filepath.Ext(path)) != ".pdf" {
+		delete(input, "pages")
+		return
+	}
+	switch v := pages.(type) {
+	case nil:
+		delete(input, "pages")
+	case string:
+		if strings.TrimSpace(v) == "" {
+			delete(input, "pages")
+		}
+	case []any:
+		if len(v) == 0 {
+			delete(input, "pages")
+		}
+	}
 }
 
 func mapUsageToAnthropic(u *Usage) map[string]int {

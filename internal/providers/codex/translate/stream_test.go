@@ -2,8 +2,11 @@ package translate
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/lobo235/cc-proxy/internal/sse"
 )
 
 func TestTranslateStreamTextResponse(t *testing.T) {
@@ -160,4 +163,86 @@ func TestTranslateStreamFunctionCallResponse(t *testing.T) {
 			t.Fatalf("translated stream missing %q:\n%s", want, got)
 		}
 	}
+}
+
+func TestTranslateStreamReadDropsInvalidPages(t *testing.T) {
+	tests := []struct {
+		name      string
+		filePath  string
+		pages     string
+		wantPages bool
+	}{
+		{
+			name:      "empty pages on go file",
+			filePath:  "/home/lobo235/dev/goscalp/internal/engine/vertical_dispatch.go",
+			pages:     "",
+			wantPages: false,
+		},
+		{
+			name:      "non-empty pages on go file",
+			filePath:  "/home/lobo235/dev/goscalp/internal/engine/vertical_dispatch.go",
+			pages:     "1",
+			wantPages: false,
+		},
+		{
+			name:      "non-empty pages on pdf",
+			filePath:  "/home/lobo235/dev/docs/spec.pdf",
+			pages:     "1",
+			wantPages: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			args := `{"file_path":"` + tt.filePath + `","offset":1,"limit":80,"pages":"` + tt.pages + `"}`
+			upstream := strings.NewReader(strings.Join([]string{
+				`event: response.output_item.added`,
+				`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"toolu_read","name":"Read","arguments":""}}`,
+				``,
+				`event: response.function_call_arguments.delta`,
+				`data: {"type":"response.function_call_arguments.delta","output_index":0,"delta":` + quoted(args) + `}`,
+				``,
+				`event: response.output_item.done`,
+				`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"toolu_read","name":"Read","arguments":` + quoted(args) + `,"status":"completed"}}`,
+				``,
+			}, "\n"))
+			var out bytes.Buffer
+			if err := TranslateStream(upstream, &out, StreamOptions{MessageID: "msg_ccp", Model: "gpt-5.5"}); err != nil {
+				t.Fatal(err)
+			}
+			events, err := sse.ParseAll(strings.NewReader(out.String()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var partial string
+			for _, evt := range events {
+				if evt.Event != "content_block_delta" {
+					continue
+				}
+				var payload struct {
+					Delta struct {
+						PartialJSON string `json:"partial_json"`
+					} `json:"delta"`
+				}
+				if err := json.Unmarshal([]byte(evt.Data), &payload); err != nil {
+					t.Fatal(err)
+				}
+				partial += payload.Delta.PartialJSON
+			}
+			var got map[string]any
+			if err := json.Unmarshal([]byte(partial), &got); err != nil {
+				t.Fatalf("tool input JSON = %q: %v", partial, err)
+			}
+			if _, ok := got["pages"]; ok != tt.wantPages {
+				t.Fatalf("pages present = %v, want %v; input = %#v", ok, tt.wantPages, got)
+			}
+			if got["file_path"] != tt.filePath {
+				t.Fatalf("file_path = %#v, want %q", got["file_path"], tt.filePath)
+			}
+		})
+	}
+}
+
+func quoted(value string) string {
+	data, _ := json.Marshal(value)
+	return string(data)
 }
