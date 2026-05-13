@@ -176,7 +176,8 @@ Codex translation:
   results are omitted with `[image omitted: <media_type>]`.
 - Tool `input_schema` becomes Responses function `parameters`. Object schemas
   missing `properties` are normalized with `properties: {}` because Codex
-  rejects otherwise-valid MCP schemas that omit the field.
+  rejects otherwise-valid MCP schemas that omit the field. Array schemas
+  missing `items` are normalized with `items: {}` for the same reason.
 - Requests are always sent upstream with `stream: true` and `store: false`.
 - JSON-schema output config maps to Responses `text.format` with strict schema.
 - `output_config.effort` values `none`, `minimal`, `low`, `medium`, `high`,

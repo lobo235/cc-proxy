@@ -132,6 +132,48 @@ func TestTranslateAddsPropertiesToEmptyObjectToolSchemas(t *testing.T) {
 	}
 }
 
+func TestTranslateAddsItemsToArrayToolSchemas(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.5",
+			"tools":[{
+				"name":"mcp__homelab__vault_kv_put_shared",
+				"input_schema":{
+					"type":"object",
+					"properties":{
+						"auto_generate_keys":{"type":"array"}
+					}
+				}
+			}],
+			"messages":[{"role":"user","content":"write secret"}]
+		}`),
+	}
+	got, err := Translate(req, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params struct {
+		Properties map[string]struct {
+			Type  string         `json:"type"`
+			Items map[string]any `json:"items"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(got.Tools[0].Parameters, &params); err != nil {
+		t.Fatal(err)
+	}
+	autoGenerateKeys := params.Properties["auto_generate_keys"]
+	if autoGenerateKeys.Type != "array" {
+		t.Fatalf("auto_generate_keys.type = %q, want array", autoGenerateKeys.Type)
+	}
+	if autoGenerateKeys.Items == nil {
+		t.Fatal("auto_generate_keys.items = nil, want empty schema object")
+	}
+	if len(autoGenerateKeys.Items) != 0 {
+		t.Fatalf("auto_generate_keys.items len = %d, want 0", len(autoGenerateKeys.Items))
+	}
+}
+
 func TestTranslateEffortMapping(t *testing.T) {
 	tests := []struct {
 		name        string

@@ -203,9 +203,14 @@ func normalizeToolParameters(raw json.RawMessage) (json.RawMessage, error) {
 func normalizeJSONSchema(schema any) {
 	switch node := schema.(type) {
 	case map[string]any:
-		if node["type"] == "object" {
+		if schemaHasType(node, "object") {
 			if _, ok := node["properties"]; !ok {
 				node["properties"] = map[string]any{}
+			}
+		}
+		if schemaHasType(node, "array") {
+			if _, ok := node["items"]; !ok {
+				node["items"] = map[string]any{}
 			}
 		}
 		for _, key := range []string{"properties", "$defs", "definitions"} {
@@ -234,6 +239,20 @@ func normalizeJSONSchema(schema any) {
 			normalizeJSONSchema(child)
 		}
 	}
+}
+
+func schemaHasType(node map[string]any, want string) bool {
+	switch typ := node["type"].(type) {
+	case string:
+		return typ == want
+	case []any:
+		for _, item := range typ {
+			if item == want {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mapEffort(cfg *outputConfig, override string) (string, bool, error) {
