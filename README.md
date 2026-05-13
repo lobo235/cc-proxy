@@ -67,8 +67,39 @@ For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
 needed and then forwards all arguments to `claude`. It defaults to
 `--model gpt-5.5` unless you pass your own `--model`.
 
+`scripts/claude-gpt` also defaults Claude Code into a lean Codex-oriented
+launch shape:
+
+- `--bare`, so Claude Code does not auto-load ambient hooks, plugins, memory,
+  or discovered project prompt files.
+- `--strict-mcp-config`, so user/global MCP servers are not advertised unless
+  you explicitly pass a config.
+- `--disable-slash-commands`, so skills do not add prompt/tool surface area by
+  default.
+- `--tools Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite`, a compact
+  built-in tool set for normal coding.
+
+Override those defaults with environment variables when you need a fuller
+Claude Code harness:
+
 ```bash
-scripts/claude-gpt --bare -p --effort max "Reply with exactly: proxy-ok"
+CLAUDE_GPT_BARE=0 scripts/claude-gpt ...
+CLAUDE_GPT_STRICT_MCP_CONFIG=0 scripts/claude-gpt ...
+CLAUDE_GPT_DISABLE_SLASH_COMMANDS=0 scripts/claude-gpt ...
+CLAUDE_GPT_TOOLS=default scripts/claude-gpt ...
+CLAUDE_GPT_TOOLS= scripts/claude-gpt --tools default ...
+CLAUDE_GPT_PROXY_VERBOSE=0 scripts/claude-gpt ...
+```
+
+To use your normal user/project MCP configuration instead of the lean default,
+disable both bare mode and strict MCP filtering:
+
+```bash
+CLAUDE_GPT_BARE=0 CLAUDE_GPT_STRICT_MCP_CONFIG=0 scripts/claude-gpt ...
+```
+
+```bash
+scripts/claude-gpt -p --effort max "Reply with exactly: proxy-ok"
 ```
 
 ## Logs and Troubleshooting
@@ -96,7 +127,16 @@ response provides them.
 
 Set `CCP_LOG_VERBOSE=1` before starting the proxy to add redacted request-shape
 and translation summaries, selected upstream response headers, and
-`count_tokens` fallback details for contract debugging.
+`count_tokens` fallback details for contract debugging. Verbose request-shape
+logs split request size into message bytes, tool-schema bytes, system-prompt
+bytes, MCP tool count, and a bounded sample of tool names. That is the first
+place to check when Claude Code sends unexpectedly large prompts.
+
+`scripts/claude-gpt` starts a stopped managed proxy with verbose logging enabled
+by default so these diagnostics are available during normal proxy testing. Set
+`CLAUDE_GPT_PROXY_VERBOSE=0` if you want the launcher to start the proxy with
+normal logging instead. If the proxy is already running, restart it with
+`CCP_LOG_VERBOSE=1 scripts/cc-proxy-ensure restart` to turn verbose logging on.
 
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with

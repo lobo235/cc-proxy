@@ -271,9 +271,11 @@ Default logs include:
 
 Verbose logging is enabled with `CCP_LOG_VERBOSE=1` or `log.verbose=true`.
 Verbose logs add request-shape summaries and translated Codex request summaries:
-message count, tool count, system kind, output effort, stream flag, upstream
-input item count, tool count, service tier, and reasoning effort. Full prompts,
-tool arguments, auth headers, and provider tokens are not logged by default.
+message count, message bytes, tool count, tool-schema bytes, MCP tool count,
+bounded tool-name samples, system kind, system bytes, output effort, stream
+flag, upstream input item count, tool count, service tier, and reasoning effort.
+Full prompts, tool arguments, auth headers, and provider tokens are not logged
+by default.
 
 Logs are mirrored to stderr when `CCP_LOG_STDERR` is set.
 

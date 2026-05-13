@@ -257,7 +257,7 @@ func TestVerboseMessagesLogsRequestShape(t *testing.T) {
 		"model":"gpt-5.4",
 		"system":"be brief",
 		"messages":[{"role":"user","content":"one"},{"role":"assistant","content":"two"}],
-		"tools":[{"name":"lookup","input_schema":{"type":"object"}}],
+		"tools":[{"name":"lookup","input_schema":{"type":"object"}},{"name":"mcp__wiki__get","input_schema":{"type":"object"}}],
 		"output_config":{"effort":"high"},
 		"stream":false
 	}`))
@@ -270,8 +270,13 @@ func TestVerboseMessagesLogsRequestShape(t *testing.T) {
 	for _, want := range []string{
 		`"msg":"message request summary"`,
 		`"message_count":2`,
-		`"tool_count":1`,
+		`"messages_bytes":`,
+		`"tool_count":2`,
+		`"tools_bytes":`,
+		`"mcp_tool_count":1`,
+		`"tool_name_sample":["lookup","mcp__wiki__get"]`,
 		`"system_kind":"string"`,
+		`"system_bytes":`,
 		`"output_effort":"high"`,
 		`"stream":false`,
 	} {

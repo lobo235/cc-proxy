@@ -8,6 +8,25 @@ PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
 MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5}"
+DEFAULT_TOOLS="${CLAUDE_GPT_TOOLS-Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite}"
+
+is_truthy() {
+	case "${1,,}" in
+		1 | true | yes | on) return 0 ;;
+		*) return 1 ;;
+	esac
+}
+
+has_flag() {
+	local needle="$1"
+	local arg
+	for arg in "${args[@]}"; do
+		case "$arg" in
+			"$needle" | "$needle"=*) return 0 ;;
+		esac
+	done
+	return 1
+}
 
 has_model=0
 REQUESTED_MODEL="$MODEL"
@@ -31,10 +50,35 @@ for i in "${!args[@]}"; do
 	esac
 done
 
-CCP_CODEX_MODEL="${CCP_CODEX_MODEL:-$REQUESTED_MODEL}" "$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
+claude_args=()
+if is_truthy "${CLAUDE_GPT_BARE:-1}" && ! has_flag "--bare"; then
+	claude_args+=(--bare)
+fi
+if is_truthy "${CLAUDE_GPT_STRICT_MCP_CONFIG:-1}" && ! has_flag "--strict-mcp-config"; then
+	claude_args+=(--strict-mcp-config)
+fi
+if is_truthy "${CLAUDE_GPT_DISABLE_SLASH_COMMANDS:-1}" && ! has_flag "--disable-slash-commands"; then
+	claude_args+=(--disable-slash-commands)
+fi
+if [[ -n "$DEFAULT_TOOLS" ]] && ! has_flag "--tools"; then
+	claude_args+=(--tools "$DEFAULT_TOOLS")
+fi
+if [[ "$has_model" -eq 0 ]]; then
+	claude_args+=(--model "$MODEL")
+fi
+claude_args+=("$@")
 
-if [[ "$has_model" -eq 1 ]]; then
-	exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude "$@"
+if is_truthy "${CLAUDE_GPT_DRY_RUN:-0}"; then
+	printf 'ANTHROPIC_BASE_URL=%q ANTHROPIC_API_KEY=%q claude' "$BASE_URL" "$API_KEY"
+	printf ' %q' "${claude_args[@]}"
+	printf '\n'
+	exit 0
 fi
 
-exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude --model "$MODEL" "$@"
+ensure_env=(CCP_CODEX_MODEL="${CCP_CODEX_MODEL:-$REQUESTED_MODEL}")
+if is_truthy "${CLAUDE_GPT_PROXY_VERBOSE:-1}"; then
+	ensure_env+=(CCP_LOG_VERBOSE=1)
+fi
+env "${ensure_env[@]}" "$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
+
+exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude "${claude_args[@]}"

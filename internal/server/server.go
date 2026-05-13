@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/lobo235/cc-proxy/internal/config"
@@ -536,8 +537,13 @@ func (s *Server) logRequestSummary(operation string, req provider.AnthropicMessa
 		"operation", operation,
 		"raw_bytes", len(req.Raw),
 		"message_count", summary.MessageCount,
+		"messages_bytes", summary.MessagesBytes,
 		"tool_count", summary.ToolCount,
+		"tools_bytes", summary.ToolsBytes,
+		"mcp_tool_count", summary.MCPToolCount,
+		"tool_name_sample", summary.ToolNameSample,
 		"system_kind", summary.SystemKind,
+		"system_bytes", summary.SystemBytes,
 		"output_effort", summary.OutputEffort,
 		"stream", summary.Stream,
 		"max_tokens", summary.MaxTokens,
@@ -545,12 +551,17 @@ func (s *Server) logRequestSummary(operation string, req provider.AnthropicMessa
 }
 
 type requestSummary struct {
-	MessageCount int
-	ToolCount    int
-	SystemKind   string
-	OutputEffort string
-	Stream       *bool
-	MaxTokens    *int
+	MessageCount   int
+	MessagesBytes  int
+	ToolCount      int
+	ToolsBytes     int
+	MCPToolCount   int
+	ToolNameSample []string
+	SystemKind     string
+	SystemBytes    int
+	OutputEffort   string
+	Stream         *bool
+	MaxTokens      *int
 }
 
 func summarizeRequest(raw json.RawMessage) requestSummary {
@@ -565,14 +576,41 @@ func summarizeRequest(raw json.RawMessage) requestSummary {
 		MaxTokens *int  `json:"max_tokens"`
 	}
 	_ = json.Unmarshal(raw, &decoded)
+	mcpToolCount, toolNameSample := summarizeTools(decoded.Tools)
 	return requestSummary{
-		MessageCount: arrayLen(decoded.Messages),
-		ToolCount:    arrayLen(decoded.Tools),
-		SystemKind:   jsonKind(decoded.System),
-		OutputEffort: decoded.OutputConfig.Effort,
-		Stream:       decoded.Stream,
-		MaxTokens:    decoded.MaxTokens,
+		MessageCount:   arrayLen(decoded.Messages),
+		MessagesBytes:  len(decoded.Messages),
+		ToolCount:      arrayLen(decoded.Tools),
+		ToolsBytes:     len(decoded.Tools),
+		MCPToolCount:   mcpToolCount,
+		ToolNameSample: toolNameSample,
+		SystemKind:     jsonKind(decoded.System),
+		SystemBytes:    len(decoded.System),
+		OutputEffort:   decoded.OutputConfig.Effort,
+		Stream:         decoded.Stream,
+		MaxTokens:      decoded.MaxTokens,
 	}
+}
+
+func summarizeTools(raw json.RawMessage) (int, []string) {
+	var tools []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return 0, nil
+	}
+	const sampleLimit = 16
+	names := make([]string, 0, min(len(tools), sampleLimit))
+	mcpCount := 0
+	for _, tool := range tools {
+		if strings.HasPrefix(tool.Name, "mcp__") {
+			mcpCount++
+		}
+		if tool.Name != "" && len(names) < sampleLimit {
+			names = append(names, tool.Name)
+		}
+	}
+	return mcpCount, names
 }
 
 func arrayLen(raw json.RawMessage) int {
