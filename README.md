@@ -55,6 +55,14 @@ Reasoning effort values `none`, `minimal`, `low`, `medium`, `high`, and
 `xhigh` are forwarded to Codex. Claude Code's `max` effort is translated to
 Codex `xhigh`.
 
+For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
+needed and then forwards all arguments to `claude`. It defaults to
+`--model gpt-5.5` unless you pass your own `--model`.
+
+```bash
+scripts/claude-gpt --bare -p --effort max "Reply with exactly: proxy-ok"
+```
+
 ## Attribution
 
 This project is based on the MIT-licensed `raine/claude-code-proxy` project at

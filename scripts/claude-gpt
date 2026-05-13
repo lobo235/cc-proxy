@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+
+HOST="${CC_PROXY_HOST:-127.0.0.1}"
+PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
+BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
+API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
+MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5}"
+
+"$SCRIPT_DIR/cc-proxy-ensure" >/dev/null
+
+has_model=0
+for arg in "$@"; do
+	case "$arg" in
+		--model | --model=*)
+			has_model=1
+			break
+			;;
+	esac
+done
+
+if [[ "$has_model" -eq 1 ]]; then
+	exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude "$@"
+fi
+
+exec env ANTHROPIC_BASE_URL="$BASE_URL" ANTHROPIC_API_KEY="$API_KEY" claude --model "$MODEL" "$@"
