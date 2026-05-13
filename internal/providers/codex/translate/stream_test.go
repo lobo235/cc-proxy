@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -282,6 +283,43 @@ func TestTranslateStreamReadDropsInvalidPages(t *testing.T) {
 			}
 			if got["file_path"] != tt.filePath {
 				t.Fatalf("file_path = %#v, want %q", got["file_path"], tt.filePath)
+			}
+		})
+	}
+}
+
+func TestSanitizeReadArgumentsRepairsOversizedLineOffset(t *testing.T) {
+	dir := t.TempDir()
+	path := dir + "/source.go"
+	var content strings.Builder
+	for i := 0; i < 420; i++ {
+		content.WriteString("line\n")
+	}
+	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name       string
+		offset     any
+		wantOffset any
+	}{
+		{name: "extra trailing zero", offset: float64(2200), wantOffset: float64(220)},
+		{name: "concatenated junk digits", offset: float64(2200279), wantOffset: float64(220)},
+		{name: "very large concatenation", offset: float64(220012457581260), wantOffset: float64(220)},
+		{name: "already valid", offset: float64(200), wantOffset: float64(200)},
+		{name: "slightly beyond EOF is left alone", offset: float64(430), wantOffset: float64(430)},
+		{name: "single nonzero suffix is left alone", offset: float64(999), wantOffset: float64(999)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			input := map[string]any{
+				"file_path": path,
+				"offset":    tt.offset,
+				"limit":     float64(120),
+			}
+			sanitizeReadArguments(input)
+			if input["offset"] != tt.wantOffset {
+				t.Fatalf("offset = %#v, want %#v; input=%#v", input["offset"], tt.wantOffset, input)
 			}
 		})
 	}

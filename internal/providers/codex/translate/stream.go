@@ -1,12 +1,15 @@
 package translate
 
 import (
+	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/lobo235/cc-proxy/internal/sse"
@@ -423,26 +426,106 @@ func sanitizeToolArguments(name, arguments string) string {
 
 func sanitizeReadArguments(input map[string]any) {
 	pages, ok := input["pages"]
-	if !ok {
-		return
-	}
 	path, _ := input["file_path"].(string)
-	if strings.ToLower(filepath.Ext(path)) != ".pdf" {
-		delete(input, "pages")
+	if ok {
+		if strings.ToLower(filepath.Ext(path)) != ".pdf" {
+			delete(input, "pages")
+		} else {
+			switch v := pages.(type) {
+			case nil:
+				delete(input, "pages")
+			case string:
+				if strings.TrimSpace(v) == "" {
+					delete(input, "pages")
+				}
+			case []any:
+				if len(v) == 0 {
+					delete(input, "pages")
+				}
+			}
+		}
+	}
+	if strings.ToLower(filepath.Ext(path)) == ".pdf" {
 		return
 	}
-	switch v := pages.(type) {
-	case nil:
-		delete(input, "pages")
-	case string:
-		if strings.TrimSpace(v) == "" {
-			delete(input, "pages")
+	repairReadOffset(input, path)
+}
+
+func repairReadOffset(input map[string]any, path string) {
+	offset, ok := numericValue(input["offset"])
+	if !ok || offset <= 0 {
+		return
+	}
+	lines, ok := countLines(path)
+	if !ok || lines <= 0 || offset <= lines {
+		return
+	}
+	repaired, ok := repairConcatenatedOffset(offset, lines)
+	if ok {
+		input["offset"] = float64(repaired)
+	}
+}
+
+func repairConcatenatedOffset(offset, lines int64) (int64, bool) {
+	if offset < lines*2 {
+		return 0, false
+	}
+	text := strconv.FormatInt(offset, 10)
+	for split := len(text) - 1; split > 0; split-- {
+		candidate, err := strconv.ParseInt(text[:split], 10, 64)
+		if err != nil || candidate <= 0 || candidate > lines {
+			continue
 		}
-	case []any:
-		if len(v) == 0 {
-			delete(input, "pages")
+		suffix := text[split:]
+		if len(suffix) >= 2 || strings.Trim(suffix, "0") == "" {
+			return candidate, true
+		}
+		return 0, false
+	}
+	return 0, false
+}
+
+func numericValue(value any) (int64, bool) {
+	switch v := value.(type) {
+	case int:
+		return int64(v), true
+	case int64:
+		return v, true
+	case float64:
+		if v != float64(int64(v)) {
+			return 0, false
+		}
+		return int64(v), true
+	case json.Number:
+		i, err := v.Int64()
+		return i, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func countLines(path string) (int64, bool) {
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, false
+	}
+	defer file.Close()
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	var lines int64
+	for scanner.Scan() {
+		lines++
+	}
+	if scanner.Err() != nil {
+		return 0, false
+	}
+	if lines == 0 {
+		info, err := file.Stat()
+		if err == nil && info.Size() > 0 {
+			return 1, true
 		}
 	}
+	return lines, true
 }
 
 func mapUsageToAnthropic(u *Usage) map[string]int {
