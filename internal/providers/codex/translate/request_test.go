@@ -202,6 +202,32 @@ func TestTranslateAddsSkillToolDisabledSkillInstructions(t *testing.T) {
 	}
 }
 
+func TestTranslateAddsClaudeCodeFileToolInstructions(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.5",
+			"system":"base instructions",
+			"messages":[{"role":"user","content":"read a file"}],
+			"tools":[{"name":"Read","description":"read file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"},"offset":{"type":"number"},"limit":{"type":"number"},"pages":{"type":"string"}}}}]
+		}`),
+	}
+	got, err := Translate(req, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"base instructions",
+		"Claude Code file tools are line-oriented",
+		"offset and limit refer to source-file line numbers/counts",
+		"use pages only for PDF files",
+	} {
+		if !strings.Contains(got.Instructions, want) {
+			t.Fatalf("instructions missing %q:\n%s", want, got.Instructions)
+		}
+	}
+}
+
 func TestTranslateEffortMapping(t *testing.T) {
 	tests := []struct {
 		name        string

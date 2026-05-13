@@ -175,9 +175,14 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	if len(anthropic.Tools) > 0 {
 		out.Tools = make([]Tool, 0, len(anthropic.Tools))
 		hasSkillTool := false
+		hasClaudeCodeFileTool := false
 		for _, tool := range anthropic.Tools {
 			if tool.Name == "Skill" {
 				hasSkillTool = true
+			}
+			switch tool.Name {
+			case "Read", "Edit", "MultiEdit", "Write":
+				hasClaudeCodeFileTool = true
 			}
 			parameters, err := normalizeToolParameters(tool.InputSchema)
 			if err != nil {
@@ -193,6 +198,9 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		if hasSkillTool {
 			out.Instructions = appendSkillToolCompatibility(out.Instructions, opts.DisabledSkillToolSkills)
 		}
+		if hasClaudeCodeFileTool {
+			out.Instructions = appendClaudeCodeFileToolCompatibility(out.Instructions)
+		}
 	}
 	if opts.SessionID != "" {
 		out.PromptCacheKey = opts.SessionID
@@ -204,6 +212,14 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		out.ServiceTier = opts.ServiceTier
 	}
 	return out, nil
+}
+
+func appendClaudeCodeFileToolCompatibility(instructions string) string {
+	compat := "cc-proxy compatibility: Claude Code file tools are line-oriented. For the Read tool, offset and limit refer to source-file line numbers/counts, not byte offsets; use pages only for PDF files. Prefer exact line numbers from diagnostics or previous Read output when inspecting or editing files."
+	if strings.TrimSpace(instructions) == "" {
+		return compat
+	}
+	return instructions + "\n\n" + compat
 }
 
 func appendSkillToolCompatibility(instructions string, disabledSkills []string) string {

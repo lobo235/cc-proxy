@@ -275,6 +275,7 @@ func (s *Server) routeProvider(w http.ResponseWriter, r *http.Request, req provi
 		SessionID:  sessionID,
 		SessionSeq: 0,
 	}
+	w.Header().Set("x-cc-proxy-request-id", meta.RequestID)
 	if current != nil {
 		meta.SessionSeq = current.Seq
 	}
@@ -477,6 +478,7 @@ func (s *Server) withRequestLogging(next http.Handler) http.Handler {
 			return
 		}
 		s.log.Info("http request",
+			"request_id", rec.Header().Get("x-cc-proxy-request-id"),
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rec.status,

@@ -228,6 +228,7 @@ func TestMessagesLogsRoutingAndHTTPRequest(t *testing.T) {
 		`"upstream_model":"gpt-5.4"`,
 		`"session_seq":1`,
 		`"msg":"http request"`,
+		`"request_id":"`,
 		`"path":"/v1/messages"`,
 		`"status":200`,
 	} {
