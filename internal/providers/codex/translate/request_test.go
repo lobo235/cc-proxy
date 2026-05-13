@@ -100,6 +100,38 @@ func TestTranslateToolUseAndToolResult(t *testing.T) {
 	}
 }
 
+func TestTranslateAddsPropertiesToEmptyObjectToolSchemas(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.5",
+			"tools":[{"name":"mcp__homelab__adguard_rewrite_list","input_schema":{"type":"object"}}],
+			"messages":[{"role":"user","content":"list rewrites"}]
+		}`),
+	}
+	got, err := Translate(req, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Tools) != 1 {
+		t.Fatalf("tools len = %d, want 1", len(got.Tools))
+	}
+	var params map[string]any
+	if err := json.Unmarshal(got.Tools[0].Parameters, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params["type"] != "object" {
+		t.Fatalf("parameters.type = %v, want object", params["type"])
+	}
+	properties, ok := params["properties"].(map[string]any)
+	if !ok {
+		t.Fatalf("parameters.properties = %#v, want empty object", params["properties"])
+	}
+	if len(properties) != 0 {
+		t.Fatalf("properties len = %d, want 0", len(properties))
+	}
+}
+
 func TestTranslateEffortMapping(t *testing.T) {
 	tests := []struct {
 		name        string

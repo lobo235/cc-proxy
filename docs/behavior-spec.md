@@ -174,6 +174,9 @@ Codex translation:
 - Assistant `tool_use` becomes Responses `function_call` with same call id.
 - User `tool_result` becomes `function_call_output`; image blocks inside tool
   results are omitted with `[image omitted: <media_type>]`.
+- Tool `input_schema` becomes Responses function `parameters`. Object schemas
+  missing `properties` are normalized with `properties: {}` because Codex
+  rejects otherwise-valid MCP schemas that omit the field.
 - Requests are always sent upstream with `stream: true` and `store: false`.
 - JSON-schema output config maps to Responses `text.format` with strict schema.
 - `output_config.effort` values `none`, `minimal`, `low`, `medium`, `high`,

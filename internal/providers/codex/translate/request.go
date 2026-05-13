@@ -160,11 +160,15 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	if len(anthropic.Tools) > 0 {
 		out.Tools = make([]Tool, 0, len(anthropic.Tools))
 		for _, tool := range anthropic.Tools {
+			parameters, err := normalizeToolParameters(tool.InputSchema)
+			if err != nil {
+				return ResponsesRequest{}, fmt.Errorf("normalizing tool %q schema: %w", tool.Name, err)
+			}
 			out.Tools = append(out.Tools, Tool{
 				Type:        "function",
 				Name:        tool.Name,
 				Description: tool.Description,
-				Parameters:  tool.InputSchema,
+				Parameters:  parameters,
 			})
 		}
 	}
@@ -178,6 +182,58 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		out.ServiceTier = opts.ServiceTier
 	}
 	return out, nil
+}
+
+func normalizeToolParameters(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{"type":"object","properties":{}}`), nil
+	}
+	var schema any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, err
+	}
+	normalizeJSONSchema(schema)
+	out, err := json.Marshal(schema)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func normalizeJSONSchema(schema any) {
+	switch node := schema.(type) {
+	case map[string]any:
+		if node["type"] == "object" {
+			if _, ok := node["properties"]; !ok {
+				node["properties"] = map[string]any{}
+			}
+		}
+		for _, key := range []string{"properties", "$defs", "definitions"} {
+			children, ok := node[key].(map[string]any)
+			if !ok {
+				continue
+			}
+			for _, child := range children {
+				normalizeJSONSchema(child)
+			}
+		}
+		for _, key := range []string{"items", "additionalProperties", "not"} {
+			normalizeJSONSchema(node[key])
+		}
+		for _, key := range []string{"anyOf", "oneOf", "allOf"} {
+			children, ok := node[key].([]any)
+			if !ok {
+				continue
+			}
+			for _, child := range children {
+				normalizeJSONSchema(child)
+			}
+		}
+	case []any:
+		for _, child := range node {
+			normalizeJSONSchema(child)
+		}
+	}
 }
 
 func mapEffort(cfg *outputConfig, override string) (string, bool, error) {
