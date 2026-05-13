@@ -9,6 +9,7 @@ import (
 	"runtime"
 	"syscall"
 
+	"github.com/lobo235/cc-proxy/internal/authcli"
 	"github.com/lobo235/cc-proxy/internal/config"
 	"github.com/lobo235/cc-proxy/internal/modelregistry"
 	"github.com/lobo235/cc-proxy/internal/provider"
@@ -19,7 +20,9 @@ var version = "dev"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		if err != authcli.ErrNotAuthenticated {
+			fmt.Fprintln(os.Stderr, err)
+		}
 		os.Exit(1)
 	}
 }
@@ -69,14 +72,13 @@ func runProviderCommand(name string, args []string) error {
 		usage()
 		return fmt.Errorf("invalid %s command", name)
 	}
-	p := provider.NotImplemented{ProviderName: name}
 	switch args[1] {
 	case "login", "device":
 		return fmt.Errorf("%s auth %s not implemented yet", name, args[1])
 	case "status":
-		return p.AuthStatus(context.Background())
+		return authcli.Status(name, authcli.Options{Stdout: os.Stdout})
 	case "logout":
-		return p.AuthLogout(context.Background())
+		return authcli.Logout(name, authcli.Options{Stdout: os.Stdout})
 	default:
 		usage()
 		return fmt.Errorf("invalid %s auth command %q", name, args[1])
