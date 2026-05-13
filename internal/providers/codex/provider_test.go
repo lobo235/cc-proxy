@@ -82,6 +82,50 @@ func TestProviderMessagesTranslatesUpstreamTextStream(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesAppliesEffortOverride(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Reasoning *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+		Include []string `json:"include"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n"))
+	}))
+	defer upstream.Close()
+	p := Provider{
+		Client: Client{BaseURL: upstream.URL, AuthStore: store},
+		Effort: "max",
+	}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"low"}}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.Reasoning == nil || captured.Reasoning.Effort != "xhigh" {
+		t.Fatalf("reasoning = %+v, want xhigh", captured.Reasoning)
+	}
+	if !containsString(captured.Include, "reasoning.encrypted_content") {
+		t.Fatalf("include = %+v, want reasoning.encrypted_content", captured.Include)
+	}
+}
+
 type recordingOut struct {
 	status int
 	header http.Header
@@ -98,4 +142,13 @@ func (o *recordingOut) WriteJSON(status int, header http.Header, body any) error
 	o.status = status
 	o.header = header
 	return json.NewEncoder(&o.body).Encode(body)
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }

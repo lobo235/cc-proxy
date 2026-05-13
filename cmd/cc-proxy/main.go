@@ -56,13 +56,16 @@ func serve() error {
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	s := server.New(cfg, server.Providers{
-		Codex: codexprovider.Provider{Client: codexprovider.Client{
-			BaseURL:    cfg.Codex.BaseURL,
-			AuthStore:  authstore.New(nil, ""),
-			Originator: cfg.Codex.Originator,
-			UserAgent:  cfg.Codex.UserAgent,
-			Version:    version,
-		}},
+		Codex: codexprovider.Provider{
+			Client: codexprovider.Client{
+				BaseURL:    cfg.Codex.BaseURL,
+				AuthStore:  authstore.New(nil, ""),
+				Originator: cfg.Codex.Originator,
+				UserAgent:  cfg.Codex.UserAgent,
+				Version:    version,
+			},
+			Effort: cfg.Codex.Effort,
+		},
 		Kimi: provider.NotImplemented{ProviderName: string(modelregistry.ProviderKimi)},
 	}, log)
 	s.SetVersion(version)

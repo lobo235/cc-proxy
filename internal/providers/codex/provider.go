@@ -11,6 +11,7 @@ import (
 
 type Provider struct {
 	Client Client
+	Effort string
 }
 
 func (p Provider) Name() string {
@@ -22,6 +23,7 @@ func (p Provider) Messages(ctx context.Context, call provider.MessagesCall, out 
 		SessionID:   call.Meta.SessionID,
 		ServiceTier: call.Route.ServiceTier,
 		Model:       call.Route.UpstreamModel,
+		Effort:      p.Effort,
 	})
 	if err != nil {
 		return err

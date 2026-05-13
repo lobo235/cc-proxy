@@ -117,6 +117,8 @@ Important config:
 - `CCP_LOG_VERBOSE` / `log.verbose`: log request bodies and detailed SSE events.
 - `CCP_CODEX_MODEL` / `codex.model`: force all Codex requests to one model.
 - `CCP_CODEX_EFFORT` / `codex.effort`: force Codex reasoning effort.
+  Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
+  and Claude-facing alias `max`.
 - `CCP_CODEX_SERVICE_TIER` / `codex.serviceTier`: `fast`, `priority`, or
   `flex`; `fast` maps to `priority`.
 - `CCP_CODEX_BASE_URL` / `codex.baseUrl`: Codex endpoint override.
@@ -173,9 +175,13 @@ Codex translation:
   results are omitted with `[image omitted: <media_type>]`.
 - Requests are always sent upstream with `stream: true` and `store: false`.
 - JSON-schema output config maps to Responses `text.format` with strict schema.
-- `output_config.effort=max` maps to Codex `xhigh`; low/medium/high pass
-  through. Invalid effort errors.
-- Reasoning effort requests include `reasoning.encrypted_content`.
+- `output_config.effort` values `none`, `minimal`, `low`, `medium`, `high`,
+  and `xhigh` pass through to Codex. Claude-facing alias `max` maps to Codex
+  `xhigh`. Invalid effort errors.
+- `CCP_CODEX_EFFORT` / `codex.effort` takes precedence over request
+  `output_config.effort`.
+- Reasoning effort requests include `reasoning.encrypted_content` except
+  explicit `none`, which asks Codex for no reasoning content.
 - Codex reasoning blocks are not forwarded to Claude Code.
 
 Kimi translation:

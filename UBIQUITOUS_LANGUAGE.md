@@ -13,6 +13,7 @@
 | **Provider affinity** | The session-local routing preference that keeps later **Model aliases** on the same **Provider**. | pinning, stickiness |
 | **Capability status** | A machine-readable snapshot of routes and **Provider** capabilities exposed by the **Proxy**. | health check, readiness blob |
 | **Behavior spec** | The implementation guide derived from the upstream MIT project's observed source behavior. | clean-room spec, ADR |
+| **Reasoning effort** | The request or config hint that controls how much upstream reasoning work a **Provider** performs before visible output. | thinking level, compute level |
 
 ## Relationships
 
@@ -52,3 +53,5 @@
   stored login state.
 - "Health" can mean process liveness or feature readiness. Use `/healthz` for
   liveness and **Capability status** for feature readiness.
+- "Max" and "xhigh" are not separate internal levels. Use `max` only for the
+  Claude-facing alias and `xhigh` for the Codex upstream **Reasoning effort**.

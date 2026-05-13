@@ -100,6 +100,108 @@ func TestTranslateToolUseAndToolResult(t *testing.T) {
 	}
 }
 
+func TestTranslateEffortMapping(t *testing.T) {
+	tests := []struct {
+		name        string
+		effort      string
+		wantEffort  string
+		wantInclude bool
+	}{
+		{name: "absent"},
+		{name: "none", effort: "none", wantEffort: "none"},
+		{name: "minimal", effort: "minimal", wantEffort: "minimal", wantInclude: true},
+		{name: "low", effort: "low", wantEffort: "low", wantInclude: true},
+		{name: "medium", effort: "medium", wantEffort: "medium", wantInclude: true},
+		{name: "high", effort: "high", wantEffort: "high", wantInclude: true},
+		{name: "xhigh", effort: "xhigh", wantEffort: "xhigh", wantInclude: true},
+		{name: "max maps to xhigh", effort: "max", wantEffort: "xhigh", wantInclude: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			outputConfig := ""
+			if tt.effort != "" {
+				outputConfig = `,"output_config":{"effort":"` + tt.effort + `"}`
+			}
+			req := provider.AnthropicMessagesRequest{
+				Model: "gpt-5.4",
+				Raw:   json.RawMessage(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]` + outputConfig + `}`),
+			}
+			got, err := Translate(req, Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantEffort == "" {
+				if got.Reasoning != nil {
+					t.Fatalf("reasoning = %+v, want nil", got.Reasoning)
+				}
+				if len(got.Include) != 0 {
+					t.Fatalf("include = %+v, want empty", got.Include)
+				}
+				return
+			}
+			if got.Reasoning == nil || got.Reasoning.Effort != tt.wantEffort {
+				t.Fatalf("reasoning = %+v, want effort %q", got.Reasoning, tt.wantEffort)
+			}
+			if tt.wantInclude && !containsString(got.Include, "reasoning.encrypted_content") {
+				t.Fatalf("include = %+v, want reasoning.encrypted_content", got.Include)
+			}
+		})
+	}
+}
+
+func TestTranslateEffortOverrideTakesPrecedence(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.4",
+		Raw:   json.RawMessage(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"low"}}`),
+	}
+	got, err := Translate(req, Options{Effort: "max"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Reasoning == nil || got.Reasoning.Effort != "xhigh" {
+		t.Fatalf("reasoning = %+v, want override mapped to xhigh", got.Reasoning)
+	}
+}
+
+func TestTranslateEffortOverrideNoneForcesNoReasoning(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.4",
+		Raw:   json.RawMessage(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"high"}}`),
+	}
+	got, err := Translate(req, Options{Effort: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Reasoning == nil || got.Reasoning.Effort != "none" {
+		t.Fatalf("reasoning = %+v, want effort none", got.Reasoning)
+	}
+	if len(got.Include) != 0 {
+		t.Fatalf("include = %+v, want empty", got.Include)
+	}
+}
+
+func TestTranslateRejectsInvalidEffortOverride(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.4",
+		Raw:   json.RawMessage(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}]}`),
+	}
+	_, err := Translate(req, Options{Effort: "extreme"})
+	if err == nil {
+		t.Fatal("expected invalid override effort error")
+	}
+}
+
+func TestTranslateRejectsInvalidEffort(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.4",
+		Raw:   json.RawMessage(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hello"}],"output_config":{"effort":"extreme"}}`),
+	}
+	_, err := Translate(req, Options{})
+	if err == nil {
+		t.Fatal("expected invalid effort error")
+	}
+}
+
 func TestCountTokensIncludesTextToolsAndImages(t *testing.T) {
 	req := provider.AnthropicMessagesRequest{
 		Model: "gpt-5.4",
@@ -125,4 +227,13 @@ func TestCountTokensIncludesTextToolsAndImages(t *testing.T) {
 	if got < 2000 {
 		t.Fatalf("tokens = %d, want image estimate included", got)
 	}
+}
+
+func containsString(items []string, needle string) bool {
+	for _, item := range items {
+		if item == needle {
+			return true
+		}
+	}
+	return false
 }

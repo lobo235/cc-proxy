@@ -14,6 +14,7 @@ type Options struct {
 	SessionID   string
 	ServiceTier string
 	Model       string
+	Effort      string
 }
 
 type ResponsesRequest struct {
@@ -146,6 +147,16 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 	} else if instructions != "" {
 		out.Instructions = instructions
 	}
+	effort, includeReasoning, err := mapEffort(anthropic.OutputConfig, opts.Effort)
+	if err != nil {
+		return ResponsesRequest{}, err
+	}
+	if effort != "" {
+		out.Reasoning = &Reasoning{Effort: effort}
+	}
+	if includeReasoning {
+		out.Include = []string{"reasoning.encrypted_content"}
+	}
 	if len(anthropic.Tools) > 0 {
 		out.Tools = make([]Tool, 0, len(anthropic.Tools))
 		for _, tool := range anthropic.Tools {
@@ -167,6 +178,29 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 		out.ServiceTier = opts.ServiceTier
 	}
 	return out, nil
+}
+
+func mapEffort(cfg *outputConfig, override string) (string, bool, error) {
+	if override != "" {
+		return mapEffortValue(override)
+	}
+	if cfg == nil || cfg.Effort == "" {
+		return "", false, nil
+	}
+	return mapEffortValue(cfg.Effort)
+}
+
+func mapEffortValue(effort string) (string, bool, error) {
+	switch effort {
+	case "none":
+		return "none", false, nil
+	case "minimal", "low", "medium", "high", "xhigh":
+		return effort, true, nil
+	case "max":
+		return "xhigh", true, nil
+	default:
+		return "", false, fmt.Errorf(`invalid effort %q: expected none, minimal, low, medium, high, xhigh, or max`, effort)
+	}
 }
 
 func CountTokens(req provider.AnthropicMessagesRequest) (int, error) {

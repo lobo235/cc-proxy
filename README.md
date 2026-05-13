@@ -48,8 +48,12 @@ To smoke-test Claude Code against Codex `gpt-5.5` through the proxy:
 ```bash
 ANTHROPIC_BASE_URL=http://127.0.0.1:18765 \
 ANTHROPIC_API_KEY=cc-proxy \
-claude -p --model gpt-5.5 "Reply with one short sentence."
+claude --bare -p --model gpt-5.5 --effort max "Reply with exactly: proxy-ok"
 ```
+
+Reasoning effort values `none`, `minimal`, `low`, `medium`, `high`, and
+`xhigh` are forwarded to Codex. Claude Code's `max` effort is translated to
+Codex `xhigh`.
 
 ## Attribution
 

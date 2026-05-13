@@ -21,6 +21,8 @@ as Codex or Kimi.
   on the same provider for a session once a direct provider model has been used.
 - **Capability status**: the proxy's machine-readable report of implemented
   routes, provider readiness, and known partial implementations.
+- **Reasoning effort**: the request or config hint that controls how much
+  upstream reasoning work Codex performs before producing visible output.
 
 ## Attribution
 
