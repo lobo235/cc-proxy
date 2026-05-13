@@ -57,7 +57,7 @@ fi
 if is_truthy "${CLAUDE_GPT_STRICT_MCP_CONFIG:-1}" && ! has_flag "--strict-mcp-config"; then
 	claude_args+=(--strict-mcp-config)
 fi
-if is_truthy "${CLAUDE_GPT_DISABLE_SLASH_COMMANDS:-1}" && ! has_flag "--disable-slash-commands"; then
+if is_truthy "${CLAUDE_GPT_DISABLE_SLASH_COMMANDS:-0}" && ! has_flag "--disable-slash-commands"; then
 	claude_args+=(--disable-slash-commands)
 fi
 if [[ -n "$DEFAULT_TOOLS" ]] && ! has_flag "--tools"; then

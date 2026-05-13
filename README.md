@@ -74,8 +74,6 @@ launch shape:
   or discovered project prompt files.
 - `--strict-mcp-config`, so user/global MCP servers are not advertised unless
   you explicitly pass a config.
-- `--disable-slash-commands`, so skills do not add prompt/tool surface area by
-  default.
 - `--tools Bash,Edit,MultiEdit,Read,Write,Grep,Glob,LS,TodoWrite`, a compact
   built-in tool set for normal coding.
 
@@ -85,10 +83,16 @@ Claude Code harness:
 ```bash
 CLAUDE_GPT_BARE=0 scripts/claude-gpt ...
 CLAUDE_GPT_STRICT_MCP_CONFIG=0 scripts/claude-gpt ...
-CLAUDE_GPT_DISABLE_SLASH_COMMANDS=0 scripts/claude-gpt ...
 CLAUDE_GPT_TOOLS=default scripts/claude-gpt ...
 CLAUDE_GPT_TOOLS= scripts/claude-gpt --tools default ...
 CLAUDE_GPT_PROXY_VERBOSE=0 scripts/claude-gpt ...
+```
+
+Core slash commands such as `/clear`, `/compact`, and `/exit` stay enabled by
+default. To disable slash commands for a one-off minimal print-mode request:
+
+```bash
+CLAUDE_GPT_DISABLE_SLASH_COMMANDS=1 scripts/claude-gpt -p ...
 ```
 
 To use your normal user/project MCP configuration instead of the lean default,
