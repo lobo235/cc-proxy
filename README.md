@@ -162,18 +162,20 @@ input is sent on each turn. A deeper optimization is to add a stateful Responses
 mapping using stored responses and `previous_response_id`, so repeated history
 does not have to be resent by `cc-proxy` after the first turn.
 
-Experimental Phase 1 stateful mode is available behind a feature flag:
+Experimental Phase 1 stateful mode is kept behind a feature flag:
 
 ```bash
 CCP_CODEX_STATEFUL_RESPONSES=1 scripts/cc-proxy-ensure restart
 ```
 
-When enabled, streaming message responses are stored upstream. On later turns in
-the same Claude Code session, `cc-proxy` sends `previous_response_id` and only
-the message-history tail not already covered by the stored response. System
-instructions and tool schemas are still resent in Phase 1 so MCPs, skills,
-agents, and Claude Code tool contracts remain intact while we measure the
-message-history reduction.
+The current Codex backend rejects stored responses with `Store must be set to
+false`, so this flag is a probe, not a recommended speed path. If the backend
+rejects `store=true`, `cc-proxy` logs the rejection, disables stateful response
+tracking for that process, and retries the request statelessly with
+`store=false`. Normal `claude-gpt` sessions should therefore keep working even
+if the experimental flag is set, but they will not get `previous_response_id`
+context reduction until the Codex backend supports stored responses or another
+state mechanism is implemented.
 
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with

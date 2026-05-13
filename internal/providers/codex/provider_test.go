@@ -289,6 +289,73 @@ func TestProviderMessagesStatefulResponsesSendOnlyNewMessages(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesFallsBackWhenStatefulStoreRejected(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var bodies []map[string]any
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			http.Error(w, `{"detail":"Store must be set to false"}`, http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`event: response.output_item.added`,
+			`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+			``,
+			`event: response.output_text.delta`,
+			`data: {"type":"response.output_text.delta","output_index":0,"delta":"ok"}`,
+			``,
+			`event: response.completed`,
+			`data: {"type":"response.completed","response":{"id":"resp_retry","usage":{"input_tokens":1,"output_tokens":1}}}`,
+			``,
+		}, "\n")))
+	}))
+	defer upstream.Close()
+
+	p := Provider{Client: Client{BaseURL: upstream.URL, AuthStore: store}, StatefulResponses: true}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model:  "gpt-5.5",
+			Stream: boolPtr(true),
+			Raw:    json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_store_rejected", SessionID: "sess-1"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("upstream calls = %d, want 2", len(bodies))
+	}
+	if bodies[0]["store"] != true {
+		t.Fatalf("first store = %v, want true", bodies[0]["store"])
+	}
+	if bodies[1]["store"] != false {
+		t.Fatalf("retry store = %v, want false", bodies[1]["store"])
+	}
+	if bodies[1]["previous_response_id"] != nil {
+		t.Fatalf("retry previous_response_id = %v, want absent", bodies[1]["previous_response_id"])
+	}
+	if out.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", out.status)
+	}
+	previousID, messageStart := p.previousResponse("sess-1", 3, true)
+	if previousID != "" || messageStart != 0 {
+		t.Fatalf("remembered state = (%q, %d), want empty after stateful rejection", previousID, messageStart)
+	}
+}
+
 func TestProviderMessagesTranslatesUpstreamTextNonStream(t *testing.T) {
 	home := t.TempDir()
 	store := authstore.New(map[string]string{}, home)

@@ -28,6 +28,7 @@ type Provider struct {
 	Verbose                 bool
 	mu                      sync.Mutex
 	state                   map[string]responseState
+	statefulRejected        bool
 }
 
 type responseState struct {
@@ -58,7 +59,7 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 		}
 	}
 	wantsStream := call.Request.WantsStream()
-	statefulStore := p.StatefulResponses && wantsStream
+	statefulStore := p.statefulStoreAllowed(wantsStream)
 	previousID, messageStart := p.previousResponse(call.Meta.SessionID, shape.MessageCount, wantsStream)
 	body, err := translate.TranslateFromMessageIndex(call.Request, translate.Options{
 		SessionID:               call.Meta.SessionID,
@@ -108,8 +109,68 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		bodySnippet := readBodySnippet(resp.Body, 4096)
-		log.Warn("codex upstream rejected", "request_id", call.Meta.RequestID, "status", resp.StatusCode, "body", bodySnippet)
-		return provider.UpstreamError{Provider: "codex", StatusCode: resp.StatusCode, Body: bodySnippet}
+		if statefulStore && isStoreMustBeFalseRejection(resp.StatusCode, bodySnippet) {
+			p.disableStatefulResponses()
+			log.Warn("codex stateful store rejected; retrying stateless",
+				"request_id", call.Meta.RequestID,
+				"status", resp.StatusCode,
+				"body", bodySnippet,
+			)
+			statefulStore = false
+			messageStart = 0
+			body, err = translate.TranslateFromMessageIndex(call.Request, translate.Options{
+				SessionID:               call.Meta.SessionID,
+				ServiceTier:             call.Route.ServiceTier,
+				Model:                   call.Route.UpstreamModel,
+				Effort:                  effort,
+				DisabledSkillToolSkills: p.DisabledSkillToolSkills,
+				Store:                   false,
+			}, 0)
+			if err != nil {
+				return err
+			}
+			if p.Verbose {
+				log.Debug("codex request translated",
+					"request_id", call.Meta.RequestID,
+					"model", body.Model,
+					"input_items", len(body.Input),
+					"tools", len(body.Tools),
+					"stateful_enabled", p.StatefulResponses,
+					"stateful_store", false,
+					"previous_response_id", false,
+					"message_start", 0,
+					"service_tier", body.ServiceTier,
+					"reasoning_effort", reasoningEffort(body.Reasoning),
+					"include_reasoning", containsString(body.Include, "reasoning.encrypted_content"),
+				)
+			}
+			start = time.Now()
+			resp, err = p.Client.PostResponses(ctx, body, call.Meta)
+			if err != nil {
+				log.Error("codex upstream request failed", "request_id", call.Meta.RequestID, "error", err.Error())
+				return err
+			}
+			defer resp.Body.Close()
+			log.Info("codex upstream response",
+				"request_id", call.Meta.RequestID,
+				"status", resp.StatusCode,
+				"duration_ms", time.Since(start).Milliseconds(),
+				"content_type", resp.Header.Get("content-type"),
+			)
+			if p.Verbose {
+				log.Debug("codex upstream response headers",
+					"request_id", call.Meta.RequestID,
+					"headers", selectedResponseHeaders(resp.Header),
+				)
+			}
+			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+				bodySnippet = readBodySnippet(resp.Body, 4096)
+			}
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			log.Warn("codex upstream rejected", "request_id", call.Meta.RequestID, "status", resp.StatusCode, "body", bodySnippet)
+			return provider.UpstreamError{Provider: "codex", StatusCode: resp.StatusCode, Body: bodySnippet}
+		}
 	}
 	if !call.Request.WantsStream() {
 		var usage translate.Usage
@@ -182,6 +243,9 @@ func (p *Provider) previousResponse(sessionID string, messageCount int, wantsStr
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.statefulRejected {
+		return "", 0
+	}
 	if p.state == nil {
 		return "", 0
 	}
@@ -198,10 +262,33 @@ func (p *Provider) rememberResponse(sessionID, responseID string, coveredMessage
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if p.statefulRejected {
+		return
+	}
 	if p.state == nil {
 		p.state = map[string]responseState{}
 	}
 	p.state[sessionID] = responseState{ResponseID: responseID, CoveredMessages: coveredMessages}
+}
+
+func (p *Provider) statefulStoreAllowed(wantsStream bool) bool {
+	if !p.StatefulResponses || !wantsStream {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return !p.statefulRejected
+}
+
+func (p *Provider) disableStatefulResponses() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.statefulRejected = true
+	p.state = nil
+}
+
+func isStoreMustBeFalseRejection(status int, body string) bool {
+	return status == http.StatusBadRequest && strings.Contains(strings.ToLower(body), "store must be set to false")
 }
 
 func (p Provider) logger() *slog.Logger {
