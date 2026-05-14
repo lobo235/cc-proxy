@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/lobo235/cc-proxy/internal/sse"
 )
+
+var errTerminalStreamEvent = errors.New("terminal stream event")
 
 type StreamOptions struct {
 	MessageID    string
@@ -376,18 +379,24 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 			}
 			u := payload.Response.Usage
 			usage = &u
+			return errTerminalStreamEvent
 		case "response.failed", "response.error", "error":
 			if err := ensureMessageStart(); err != nil {
 				return err
 			}
-			return emit("error", map[string]any{
+			if err := emit("error", map[string]any{
 				"type":  "error",
 				"error": map[string]string{"type": "api_error", "message": "Upstream error"},
-			})
+			}); err != nil {
+				return err
+			}
+			return errTerminalStreamEvent
 		}
 		return nil
 	}); err != nil {
-		return err
+		if !errors.Is(err, errTerminalStreamEvent) {
+			return err
+		}
 	}
 	if err := ensureMessageStart(); err != nil {
 		return err

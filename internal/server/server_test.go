@@ -286,6 +286,26 @@ func TestVerboseMessagesLogsRequestShape(t *testing.T) {
 	}
 }
 
+func TestStatusRecorderDoesNotWriteHeaderTwice(t *testing.T) {
+	base := &countingResponseWriter{header: http.Header{}}
+	rec := &statusRecorder{ResponseWriter: base, status: http.StatusOK}
+
+	if _, err := rec.Write([]byte("hello")); err != nil {
+		t.Fatal(err)
+	}
+	rec.WriteHeader(http.StatusInternalServerError)
+
+	if base.writeHeaders != 1 {
+		t.Fatalf("WriteHeader calls = %d, want 1", base.writeHeaders)
+	}
+	if rec.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.status)
+	}
+	if base.status != http.StatusOK {
+		t.Fatalf("base status = %d, want 200", base.status)
+	}
+}
+
 func testProviders() Providers {
 	return Providers{
 		Codex: provider.NotImplemented{ProviderName: "codex"},
@@ -314,4 +334,26 @@ func (p *fakeProvider) Messages(_ context.Context, call provider.MessagesCall, o
 func (p *fakeProvider) CountTokens(context.Context, provider.CountTokensCall) (provider.CountTokensResponse, error) {
 	p.countCalls++
 	return provider.CountTokensResponse{InputTokens: 42}, nil
+}
+
+type countingResponseWriter struct {
+	header       http.Header
+	status       int
+	writeHeaders int
+}
+
+func (w *countingResponseWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *countingResponseWriter) Write(p []byte) (int, error) {
+	if w.writeHeaders == 0 {
+		w.WriteHeader(http.StatusOK)
+	}
+	return len(p), nil
+}
+
+func (w *countingResponseWriter) WriteHeader(status int) {
+	w.writeHeaders++
+	w.status = status
 }

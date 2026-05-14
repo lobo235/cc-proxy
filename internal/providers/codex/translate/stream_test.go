@@ -122,6 +122,46 @@ func TestTranslateStreamReportsFullCodexUsage(t *testing.T) {
 	}
 }
 
+func TestTranslateStreamStopsOnCompletedWithoutWaitingForEOF(t *testing.T) {
+	upstreamReader, upstreamWriter := io.Pipe()
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- TranslateStream(upstreamReader, &out, StreamOptions{MessageID: "msg_ccp", Model: "gpt-5.5"})
+	}()
+
+	_, err := io.WriteString(upstreamWriter, strings.Join([]string{
+		`event: response.output_item.added`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1"}}`,
+		``,
+		`event: response.output_text.delta`,
+		`data: {"type":"response.output_text.delta","output_index":0,"delta":"done"}`,
+		``,
+		`event: response.output_item.done`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"message"}}`,
+		``,
+		`event: response.completed`,
+		`data: {"type":"response.completed","response":{"usage":{"input_tokens":2,"output_tokens":1}}}`,
+		``,
+	}, "\n")+"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("TranslateStream waited for upstream EOF after response.completed")
+	}
+	if !strings.Contains(out.String(), "event: message_stop") {
+		t.Fatalf("translated stream missing message_stop:\n%s", out.String())
+	}
+	_ = upstreamWriter.Close()
+}
+
 func TestTranslateStreamReportsResponseID(t *testing.T) {
 	upstream := strings.NewReader(strings.Join([]string{
 		`event: response.created`,

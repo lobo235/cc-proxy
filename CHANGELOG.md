@@ -27,6 +27,17 @@ This project is a Go reimplementation of Raine Virta's MIT-licensed
 
 ### Fixed
 
+- Codex stream translation now treats terminal `response.completed` and
+  upstream error events as the end of the downstream Anthropic SSE stream
+  instead of waiting for the upstream socket to close. This prevents
+  `claude-gpt` sessions from hanging for minutes after a tool result such as
+  `Error editing file`.
+- HTTP request logging no longer triggers Go's `superfluous response.WriteHeader`
+  warning when an error path attempts to write a status after streaming has
+  already begun.
+- `scripts/claude-gpt` now passes the local proxy token through
+  `ANTHROPIC_AUTH_TOKEN` while leaving `ANTHROPIC_API_KEY` empty, matching
+  Claude Code's current auth expectations for a custom Anthropic base URL.
 - Raised the SSE parser per-line cap from 4 MiB to 32 MiB so Codex events
   carrying large encrypted reasoning content or large tool-call argument blobs
   no longer fail with `bufio.Scanner: token too long`. The failure mode looked
