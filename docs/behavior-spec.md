@@ -49,7 +49,7 @@ Unknown commands print usage and exit non-zero.
 ## Model Routing
 
 Incoming model names may include a Claude Code context-window suffix such as
-`[1m]`; strip that suffix before routing.
+`[200k]` or `[1m]`; strip that suffix before routing.
 
 Provider routing:
 

@@ -27,6 +27,13 @@ This project is a Go reimplementation of Raine Virta's MIT-licensed
 
 ### Fixed
 
+- `scripts/claude-gpt` now defaults Claude Code to `gpt-5.5[200k]` and
+  `gpt-5.4-mini[200k]` instead of advertising a 1M-token window. The proxy still
+  strips the suffix before routing, but Claude Code now compacts long sessions
+  earlier instead of sending requests that Codex rejects with
+  `context_length_exceeded`.
+- Model routing now strips any numeric Claude Code context-window suffix such as
+  `[200k]`, `[200K]`, or `[1m]`, not only `[1m]`.
 - Codex stream translation now treats terminal `response.completed` and
   upstream error events as the end of the downstream Anthropic SSE stream
   instead of waiting for the upstream socket to close. This prevents

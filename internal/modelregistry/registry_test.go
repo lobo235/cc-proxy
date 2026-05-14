@@ -8,9 +8,18 @@ import (
 )
 
 func TestNormalizeIncomingModel(t *testing.T) {
-	got := NormalizeIncomingModel("gpt-5.4[1m]")
-	if got != "gpt-5.4" {
-		t.Fatalf("got %q", got)
+	tests := map[string]string{
+		"gpt-5.4[1m]":     "gpt-5.4",
+		"gpt-5.5[200k]":   "gpt-5.5",
+		"gpt-5.5[200K]":   "gpt-5.5",
+		"gpt-5.5[1M]":     "gpt-5.5",
+		"gpt-5.5[beta]":   "gpt-5.5[beta]",
+		"gpt-5.5-preview": "gpt-5.5-preview",
+	}
+	for input, want := range tests {
+		if got := NormalizeIncomingModel(input); got != want {
+			t.Fatalf("NormalizeIncomingModel(%q) = %q, want %q", input, got, want)
+		}
 	}
 }
 

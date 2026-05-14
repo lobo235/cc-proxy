@@ -7,8 +7,8 @@ HOST="${CC_PROXY_HOST:-127.0.0.1}"
 PORT="${CC_PROXY_PORT:-${PORT:-18765}}"
 BASE_URL="${CC_PROXY_BASE_URL:-http://$HOST:$PORT}"
 API_KEY="${CC_PROXY_ANTHROPIC_API_KEY:-cc-proxy}"
-MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5[1m]}"
-SMALL_FAST_MODEL="${CLAUDE_GPT_SMALL_FAST_MODEL:-gpt-5.4-mini[1m]}"
+MODEL="${CLAUDE_GPT_MODEL:-gpt-5.5[200k]}"
+SMALL_FAST_MODEL="${CLAUDE_GPT_SMALL_FAST_MODEL:-gpt-5.4-mini[200k]}"
 LEAN_DEFAULT="${CLAUDE_GPT_LEAN:-0}"
 CACHE_KEY_STRATEGY="${CLAUDE_GPT_CACHE_KEY_STRATEGY:-${CCP_CODEX_CACHE_KEY_STRATEGY:-}}"
 
@@ -21,9 +21,9 @@ is_truthy() {
 
 strip_context_suffix() {
 	local model="$1"
-	case "$model" in
-		*"[1m]" | *"[1M]") model="${model%????}" ;;
-	esac
+	if [[ "$model" =~ ^(.+)\[[0-9]+[kKmM]\]$ ]]; then
+		model="${BASH_REMATCH[1]}"
+	fi
 	printf '%s' "$model"
 }
 

@@ -65,10 +65,12 @@ its UI.
 
 For daily use, `scripts/claude-gpt` starts `cc-proxy` in the background when
 needed and then forwards all arguments to `claude`. It defaults to
-`--model gpt-5.5[1m]` unless you pass your own `--model`. The `[1m]` suffix is
-accepted by Claude Code and tells it to use a 1M-token context window for
-compaction decisions; the proxy strips that suffix before sending the model to
-Codex.
+`--model gpt-5.5[200k]` unless you pass your own `--model`. The `[200k]`
+suffix is accepted by Claude Code and tells it to use a conservative context
+window for compaction decisions; the proxy strips that suffix before sending
+the model to Codex. Earlier versions used `[1m]`, but that can let long Claude
+Code sessions grow past the Codex backend's actual context window before
+compaction runs.
 
 `scripts/claude-gpt` preserves the normal Claude Code harness by default, so
 your configured MCP servers, skills, agents, core slash commands, project
@@ -76,7 +78,7 @@ memory, and default tools are available.
 
 The launcher also applies the upstream project recommendations for Claude Code:
 
-- `ANTHROPIC_SMALL_FAST_MODEL=gpt-5.4-mini[1m]` unless already set.
+- `ANTHROPIC_SMALL_FAST_MODEL=gpt-5.4-mini[200k]` unless already set.
 - `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` unless already set.
 - `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1` unless already set.
 

@@ -2,11 +2,14 @@ package modelregistry
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/lobo235/cc-proxy/internal/config"
 )
+
+var contextWindowSuffix = regexp.MustCompile(`\[[0-9]+[kKmM]\]$`)
 
 var CodexModels = []string{
 	"gpt-5.2",
@@ -47,7 +50,7 @@ type Resolved struct {
 }
 
 func NormalizeIncomingModel(model string) string {
-	return strings.TrimSuffix(strings.TrimSuffix(model, "[1m]"), "[1M]")
+	return contextWindowSuffix.ReplaceAllString(model, "")
 }
 
 func Resolve(model string, aliasProvider config.AliasProvider) (Resolved, bool) {
