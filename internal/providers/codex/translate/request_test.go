@@ -42,39 +42,6 @@ func TestTranslateUserTextMessage(t *testing.T) {
 	}
 }
 
-func TestTranslateStatefulResponseOptions(t *testing.T) {
-	req := provider.AnthropicMessagesRequest{
-		Model: "gpt-5.5",
-		Raw: json.RawMessage(`{
-			"model":"gpt-5.5",
-			"messages":[
-				{"role":"user","content":"old"},
-				{"role":"assistant","content":"old answer"},
-				{"role":"user","content":"new"}
-			]
-		}`),
-	}
-	got, err := TranslateFromMessageIndex(req, Options{
-		Store:              true,
-		PreviousResponseID: "resp_prev",
-	}, 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.Store {
-		t.Fatal("store = false, want true")
-	}
-	if got.PreviousResponseID != "resp_prev" {
-		t.Fatalf("previous_response_id = %q, want resp_prev", got.PreviousResponseID)
-	}
-	if len(got.Input) != 1 {
-		t.Fatalf("input len = %d, want 1", len(got.Input))
-	}
-	if got.Input[0].Role != "user" || got.Input[0].Content[0].Text != "new" {
-		t.Fatalf("input[0] = %+v, want only new user message", got.Input[0])
-	}
-}
-
 func TestTranslateSystemInstructionsDropsBillingHeader(t *testing.T) {
 	req := provider.AnthropicMessagesRequest{
 		Model: "gpt-5.4",

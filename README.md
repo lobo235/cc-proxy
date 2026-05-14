@@ -155,27 +155,12 @@ servers, skills, agents, and project tooling are loaded, those schemas can be a
 large repeated prefix. `cc-proxy` preserves that harness by default because those
 tools are part of the value of Claude Code.
 
-The proxy currently forwards translated Codex requests statelessly
-(`store=false`) with a stable `prompt_cache_key`. That allows OpenAI prompt
-caching to help with repeated prefixes, but it still means the full translated
-input is sent on each turn. A deeper optimization is to add a stateful Responses
-mapping using stored responses and `previous_response_id`, so repeated history
-does not have to be resent by `cc-proxy` after the first turn.
-
-Experimental Phase 1 stateful mode is kept behind a feature flag:
-
-```bash
-CCP_CODEX_STATEFUL_RESPONSES=1 scripts/cc-proxy-ensure restart
-```
-
-The current Codex backend rejects stored responses with `Store must be set to
-false`, so this flag is a probe, not a recommended speed path. If the backend
-rejects `store=true`, `cc-proxy` logs the rejection, disables stateful response
-tracking for that process, and retries the request statelessly with
-`store=false`. Normal `claude-gpt` sessions should therefore keep working even
-if the experimental flag is set, but they will not get `previous_response_id`
-context reduction until the Codex backend supports stored responses or another
-state mechanism is implemented.
+The proxy forwards translated Codex requests statelessly (`store=false`) with a
+stable `prompt_cache_key`. That allows OpenAI prompt caching to help with
+repeated prefixes, but it still means the full translated input is sent on each
+turn. The Codex backend currently rejects stored Responses API requests with
+`Store must be set to false`, so `cc-proxy` does not expose a
+`previous_response_id`/stored-response mode.
 
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with

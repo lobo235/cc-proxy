@@ -74,7 +74,6 @@ func serve() error {
 			},
 			Effort:                  cfg.Codex.Effort,
 			CompactionEffort:        cfg.Codex.CompactionEffort,
-			StatefulResponses:       cfg.Codex.StatefulResponses,
 			DisabledSkillToolSkills: cfg.SkillToolDisabledSkills,
 			Logger:                  log,
 			Verbose:                 cfg.Log.Verbose,

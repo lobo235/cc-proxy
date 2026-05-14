@@ -16,26 +16,23 @@ type Options struct {
 	Model                   string
 	Effort                  string
 	DisabledSkillToolSkills []string
-	Store                   bool
-	PreviousResponseID      string
 }
 
 type ResponsesRequest struct {
-	Model              string          `json:"model"`
-	Instructions       string          `json:"instructions,omitempty"`
-	Input              []InputItem     `json:"input"`
-	Tools              []Tool          `json:"tools,omitempty"`
-	ToolChoice         any             `json:"tool_choice,omitempty"`
-	ParallelToolCalls  bool            `json:"parallel_tool_calls"`
-	Reasoning          *Reasoning      `json:"reasoning,omitempty"`
-	Store              bool            `json:"store"`
-	Stream             bool            `json:"stream"`
-	Include            []string        `json:"include,omitempty"`
-	PreviousResponseID string          `json:"previous_response_id,omitempty"`
-	ServiceTier        string          `json:"service_tier,omitempty"`
-	PromptCacheKey     string          `json:"prompt_cache_key,omitempty"`
-	Text               TextConfig      `json:"text"`
-	ClientMetadata     json.RawMessage `json:"client_metadata,omitempty"`
+	Model             string          `json:"model"`
+	Instructions      string          `json:"instructions,omitempty"`
+	Input             []InputItem     `json:"input"`
+	Tools             []Tool          `json:"tools,omitempty"`
+	ToolChoice        any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls bool            `json:"parallel_tool_calls"`
+	Reasoning         *Reasoning      `json:"reasoning,omitempty"`
+	Store             bool            `json:"store"`
+	Stream            bool            `json:"stream"`
+	Include           []string        `json:"include,omitempty"`
+	ServiceTier       string          `json:"service_tier,omitempty"`
+	PromptCacheKey    string          `json:"prompt_cache_key,omitempty"`
+	Text              TextConfig      `json:"text"`
+	ClientMetadata    json.RawMessage `json:"client_metadata,omitempty"`
 }
 
 type InputTokensRequest struct {
@@ -143,19 +140,9 @@ type outputFormat struct {
 const imageTokenEstimate = 2000
 
 func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRequest, error) {
-	return TranslateFromMessageIndex(req, opts, 0)
-}
-
-func TranslateFromMessageIndex(req provider.AnthropicMessagesRequest, opts Options, messageStart int) (ResponsesRequest, error) {
 	anthropic, err := decodeRequest(req)
 	if err != nil {
 		return ResponsesRequest{}, err
-	}
-	if messageStart > 0 {
-		if messageStart > len(anthropic.Messages) {
-			return ResponsesRequest{}, fmt.Errorf("message start %d exceeds message count %d", messageStart, len(anthropic.Messages))
-		}
-		anthropic.Messages = anthropic.Messages[messageStart:]
 	}
 	input, err := buildInput(anthropic.Messages)
 	if err != nil {
@@ -164,14 +151,11 @@ func TranslateFromMessageIndex(req provider.AnthropicMessagesRequest, opts Optio
 	out := ResponsesRequest{
 		Model:             anthropic.Model,
 		Input:             input,
-		Store:             opts.Store,
+		Store:             false,
 		Stream:            true,
 		ParallelToolCalls: true,
 		ToolChoice:        mapToolChoice(anthropic.ToolChoice),
 		Text:              TextConfig{Verbosity: "low"},
-	}
-	if opts.PreviousResponseID != "" {
-		out.PreviousResponseID = opts.PreviousResponseID
 	}
 	if instructions, err := buildInstructions(anthropic.System); err != nil {
 		return ResponsesRequest{}, err

@@ -33,12 +33,11 @@ func TestLoadEnvOverridesConfig(t *testing.T) {
 	}
 	cfg, err := Load(LoadOptions{
 		Env: map[string]string{
-			"PORT":                         "2222",
-			"CCP_ALIAS_PROVIDER":           "codex",
-			"CCP_CODEX_MODEL":              "gpt-5.5",
-			"CCP_CODEX_COMPACTION_EFFORT":  "low",
-			"CCP_CODEX_STATEFUL_RESPONSES": "1",
-			"CCP_CODEX_INPUT_TOKENS_URL":   "https://example.test/input_tokens",
+			"PORT":                        "2222",
+			"CCP_ALIAS_PROVIDER":          "codex",
+			"CCP_CODEX_MODEL":             "gpt-5.5",
+			"CCP_CODEX_COMPACTION_EFFORT": "low",
+			"CCP_CODEX_INPUT_TOKENS_URL":  "https://example.test/input_tokens",
 		},
 		ConfigPath: path,
 		Stderr:     &bytes.Buffer{},
@@ -57,9 +56,6 @@ func TestLoadEnvOverridesConfig(t *testing.T) {
 	}
 	if cfg.Codex.CompactionEffort != "low" {
 		t.Fatalf("codex compaction effort = %q, want low", cfg.Codex.CompactionEffort)
-	}
-	if !cfg.Codex.StatefulResponses {
-		t.Fatal("codex stateful responses = false, want true")
 	}
 	if cfg.Codex.InputTokensURL != "https://example.test/input_tokens" {
 		t.Fatalf("codex input token url = %q", cfg.Codex.InputTokensURL)
