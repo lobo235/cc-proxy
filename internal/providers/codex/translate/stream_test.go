@@ -187,6 +187,36 @@ func TestTranslateStreamReportsResponseID(t *testing.T) {
 	}
 }
 
+func TestTranslateStreamPropagatesUpstreamErrorDetails(t *testing.T) {
+	upstream := strings.NewReader(strings.Join([]string{
+		`event: response.error`,
+		`data: {"type":"response.error","error":{"type":"server_error","code":"overloaded","message":"model overloaded; retry later"}}`,
+		``,
+	}, "\n"))
+	var out bytes.Buffer
+	var got StreamError
+	called := false
+	if err := TranslateStream(upstream, &out, StreamOptions{
+		MessageID: "msg_ccp",
+		Model:     "gpt-5.5",
+		OnStreamError: func(streamErr StreamError) {
+			got = streamErr
+			called = true
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !called {
+		t.Fatal("stream error callback was not called")
+	}
+	if got.EventType != "response.error" || got.Type != "server_error" || got.Code != "overloaded" || got.Message != "model overloaded; retry later" {
+		t.Fatalf("stream error = %+v, want upstream details", got)
+	}
+	if !strings.Contains(out.String(), `"message":"model overloaded; retry later"`) {
+		t.Fatalf("translated stream did not include upstream error message:\n%s", out.String())
+	}
+}
+
 func TestTranslateResponseCollectsNonStreamMessage(t *testing.T) {
 	upstream := strings.NewReader(strings.Join([]string{
 		`event: response.output_item.added`,

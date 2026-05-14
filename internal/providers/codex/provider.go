@@ -151,6 +151,17 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 			usage = u
 			hasUsage = true
 		},
+		OnStreamError: func(streamErr translate.StreamError) {
+			log.Warn("codex stream upstream error",
+				"request_id", call.Meta.RequestID,
+				"event_type", streamErr.EventType,
+				"upstream_error_type", streamErr.Type,
+				"upstream_error_code", streamErr.Code,
+				"message", streamErr.Message,
+				"bytes_emitted", counting.bytes,
+				"duration_ms", time.Since(streamStart).Milliseconds(),
+			)
+		},
 	})
 	if err != nil {
 		log.Warn("codex stream translation failed",

@@ -48,6 +48,10 @@ This project is a Go reimplementation of Raine Virta's MIT-licensed
   proxy now salvages with a minimal `message_start` + `error` + `message_stop`
   sequence and logs `codex stream translation failed` at WARN. Operators see a
   real error event instead of an empty SSE response.
+- Codex stream error events now preserve the upstream error message in the
+  downstream Anthropic SSE error and log the upstream error type/code/message at
+  WARN, making failures like Claude Code's generic `API Error: Upstream error`
+  diagnosable from proxy logs.
 
 ## v0.1.0 - 2026-05-13
 

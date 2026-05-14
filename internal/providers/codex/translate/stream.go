@@ -19,10 +19,11 @@ import (
 var errTerminalStreamEvent = errors.New("terminal stream event")
 
 type StreamOptions struct {
-	MessageID    string
-	Model        string
-	OnUsage      func(Usage)
-	OnResponseID func(string)
+	MessageID     string
+	Model         string
+	OnUsage       func(Usage)
+	OnResponseID  func(string)
+	OnStreamError func(StreamError)
 }
 
 type Usage struct {
@@ -35,6 +36,19 @@ type Usage struct {
 	OutputTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 	} `json:"output_tokens_details,omitempty"`
+}
+
+type StreamError struct {
+	EventType string
+	Type      string
+	Code      string
+	Message   string
+}
+
+type upstreamError struct {
+	Type    string `json:"type,omitempty"`
+	Code    string `json:"code,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 type upstreamStreamEvent struct {
@@ -51,9 +65,11 @@ type upstreamStreamEvent struct {
 		Name      string `json:"name,omitempty"`
 		Arguments string `json:"arguments,omitempty"`
 	} `json:"item,omitempty"`
+	Error    upstreamError `json:"error,omitempty"`
 	Response struct {
-		ID    string `json:"id,omitempty"`
-		Usage Usage  `json:"usage,omitempty"`
+		ID    string        `json:"id,omitempty"`
+		Usage Usage         `json:"usage,omitempty"`
+		Error upstreamError `json:"error,omitempty"`
 	} `json:"response,omitempty"`
 }
 
@@ -381,12 +397,16 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 			usage = &u
 			return errTerminalStreamEvent
 		case "response.failed", "response.error", "error":
+			streamErr := streamErrorFromPayload(typ, payload)
+			if opts.OnStreamError != nil {
+				opts.OnStreamError(streamErr)
+			}
 			if err := ensureMessageStart(); err != nil {
 				return err
 			}
 			if err := emit("error", map[string]any{
 				"type":  "error",
-				"error": map[string]string{"type": "api_error", "message": "Upstream error"},
+				"error": map[string]string{"type": "api_error", "message": streamErr.Message},
 			}); err != nil {
 				return err
 			}
@@ -412,6 +432,30 @@ func TranslateStream(upstream io.Reader, out io.Writer, opts StreamOptions) erro
 		opts.OnUsage(*usage)
 	}
 	return emit("message_stop", map[string]string{"type": "message_stop"})
+}
+
+func streamErrorFromPayload(eventType string, payload upstreamStreamEvent) StreamError {
+	upstream := payload.Error
+	if upstream.Message == "" && upstream.Type == "" && upstream.Code == "" {
+		upstream = payload.Response.Error
+	}
+	message := strings.TrimSpace(upstream.Message)
+	if message == "" {
+		message = "Upstream error"
+	}
+	if len(message) > 1000 {
+		message = message[:1000] + "..."
+	}
+	errType := strings.TrimSpace(upstream.Type)
+	if errType == "" {
+		errType = "upstream_error"
+	}
+	return StreamError{
+		EventType: eventType,
+		Type:      errType,
+		Code:      strings.TrimSpace(upstream.Code),
+		Message:   message,
+	}
 }
 
 func toolUseID(callID, fallback string) string {

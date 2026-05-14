@@ -408,6 +408,57 @@ func TestProviderMessagesLogsUpstreamResponse(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesLogsStreamUpstreamError(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte(strings.Join([]string{
+			`event: response.error`,
+			`data: {"type":"response.error","error":{"type":"server_error","code":"overloaded","message":"model overloaded; retry later"}}`,
+			``,
+		}, "\n")))
+	}))
+	defer upstream.Close()
+	p := Provider{
+		Client: Client{BaseURL: upstream.URL, AuthStore: store},
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+	}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model:  "gpt-5.5",
+			Stream: boolPtr(true),
+			Raw:    json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_123"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.body.String(), `"message":"model overloaded; retry later"`) {
+		t.Fatalf("stream missing upstream error message:\n%s", out.body.String())
+	}
+	got := logs.String()
+	for _, want := range []string{
+		`"msg":"codex stream upstream error"`,
+		`"request_id":"req_123"`,
+		`"event_type":"response.error"`,
+		`"upstream_error_type":"server_error"`,
+		`"upstream_error_code":"overloaded"`,
+		`"message":"model overloaded; retry later"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("logs missing %s:\n%s", want, got)
+		}
+	}
+}
+
 func TestProviderMessagesReturnsUpstreamErrorWithSnippet(t *testing.T) {
 	home := t.TempDir()
 	store := authstore.New(map[string]string{}, home)
