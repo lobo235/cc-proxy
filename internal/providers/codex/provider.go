@@ -21,6 +21,12 @@ import (
 
 var unsupportedInputTokenEndpoints sync.Map
 
+const (
+	autoModeClassifierModel       = "gpt-5.4-mini"
+	autoModeClassifierServiceTier = "priority"
+	autoModeClassifierEffort      = "none"
+)
+
 type Provider struct {
 	Client                  Client
 	Effort                  string
@@ -38,6 +44,8 @@ func (p Provider) Name() string {
 func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out provider.MessagesOut) error {
 	log := p.logger()
 	effort := p.Effort
+	model := call.Route.UpstreamModel
+	serviceTier := call.Route.ServiceTier
 	shape := summarizeRequestShape(call.Request.Raw)
 	if isLikelyCompactionRequest(call.Request, shape) {
 		if compactionEffort := p.compactionEffort(); compactionEffort != "inherit" {
@@ -53,10 +61,25 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 			)
 		}
 	}
+	if isLikelyAutoModeClassifierRequest(call.Request, shape) {
+		model = autoModeClassifierModel
+		serviceTier = autoModeClassifierServiceTier
+		effort = autoModeClassifierEffort
+		log.Info("codex auto-mode classifier route applied",
+			"request_id", call.Meta.RequestID,
+			"model", model,
+			"requested_model", call.Route.UpstreamModel,
+			"service_tier", serviceTier,
+			"effort", effort,
+			"raw_bytes", shape.RawBytes,
+			"message_count", shape.MessageCount,
+			"max_tokens", shape.MaxTokens,
+		)
+	}
 	body, err := translate.Translate(call.Request, translate.Options{
 		SessionID:               call.Meta.SessionID,
-		ServiceTier:             call.Route.ServiceTier,
-		Model:                   call.Route.UpstreamModel,
+		ServiceTier:             serviceTier,
+		Model:                   model,
 		Effort:                  effort,
 		DisabledSkillToolSkills: p.DisabledSkillToolSkills,
 		CacheKeyStrategy:        p.CacheKeyStrategy,
@@ -244,6 +267,18 @@ func isLikelyCompactionRequest(req provider.AnthropicMessagesRequest, shape requ
 		shape.MessageCount >= 10 &&
 		shape.ToolCount <= 3 &&
 		shape.MaxTokens >= 10_000
+}
+
+func isLikelyAutoModeClassifierRequest(req provider.AnthropicMessagesRequest, shape requestShape) bool {
+	if req.WantsStream() {
+		return false
+	}
+	return shape.RawBytes >= 50_000 &&
+		shape.MessageCount > 0 &&
+		shape.MessageCount <= 3 &&
+		shape.ToolCount == 0 &&
+		shape.MaxTokens > 0 &&
+		shape.MaxTokens <= 128
 }
 
 func (p Provider) compactionEffort() string {

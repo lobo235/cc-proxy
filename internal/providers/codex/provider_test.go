@@ -251,6 +251,51 @@ func TestProviderMessagesTranslatesUpstreamTextNonStream(t *testing.T) {
 	}
 }
 
+func TestProviderMessagesRoutesAutoModeClassifierToFastModel(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Model       string `json:"model"`
+		ServiceTier string `json:"service_tier"`
+		Reasoning   *struct {
+			Effort string `json:"effort"`
+		} `json:"reasoning"`
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n"))
+	}))
+	defer upstream.Close()
+	p := Provider{Client: Client{BaseURL: upstream.URL, AuthStore: store}}
+	out := &recordingOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model: "gpt-5.5",
+			Raw:   autoModeClassifierRequestRaw(t),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_classifier", SessionID: "sess-1"},
+	}, out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if captured.Model != autoModeClassifierModel {
+		t.Fatalf("model = %q, want %q", captured.Model, autoModeClassifierModel)
+	}
+	if captured.ServiceTier != autoModeClassifierServiceTier {
+		t.Fatalf("service_tier = %q, want %q", captured.ServiceTier, autoModeClassifierServiceTier)
+	}
+	if captured.Reasoning == nil || captured.Reasoning.Effort != autoModeClassifierEffort {
+		t.Fatalf("reasoning = %+v, want effort %q", captured.Reasoning, autoModeClassifierEffort)
+	}
+}
+
 func TestProviderMessagesAppliesEffortOverride(t *testing.T) {
 	home := t.TempDir()
 	store := authstore.New(map[string]string{}, home)
@@ -355,6 +400,23 @@ func compactionRequestRaw(t *testing.T) json.RawMessage {
 		"max_tokens": 20_000,
 		"output_config": map[string]any{
 			"effort": "max",
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+func autoModeClassifierRequestRaw(t *testing.T) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"model":      "gpt-5.5",
+		"system":     strings.Repeat("tool safety classifier policy ", 2_500),
+		"max_tokens": 64,
+		"messages": []map[string]string{
+			{"role": "user", "content": "Decide whether this Skill tool call is allowed."},
+			{"role": "assistant", "content": "Return only the safety decision."},
 		},
 	})
 	if err != nil {

@@ -32,6 +32,10 @@ This project is a Go reimplementation of Raine Virta's MIT-licensed
   strips the suffix before routing, but Claude Code now compacts long sessions
   earlier instead of sending requests that Codex rejects with
   `context_length_exceeded`.
+- Auto-mode classifier requests now route to `gpt-5.4-mini` on the priority
+  service tier with reasoning disabled. These hidden 64-token safety checks can
+  otherwise time out while Claude Code is deciding whether a `Skill` tool call
+  is allowed, surfacing as `gpt-5.5[1m] is temporarily unavailable`.
 - Model routing now strips any numeric Claude Code context-window suffix such as
   `[200k]`, `[200K]`, or `[1m]`, not only `[1m]`.
 - Codex stream translation now treats terminal `response.completed` and
