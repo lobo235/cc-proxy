@@ -32,6 +32,24 @@ func TestParseAllHandlesMultilineDataAndComments(t *testing.T) {
 	}
 }
 
+func TestParseAllHandlesLargeDataLines(t *testing.T) {
+	// Codex can emit very large SSE data lines (e.g. encrypted reasoning content
+	// or a tool call with large arguments). Anything below MaxLineBytes must
+	// parse without bufio.Scanner returning ErrTooLong.
+	const size = 8 * 1024 * 1024
+	payload := strings.Repeat("a", size)
+	events, err := ParseAll(strings.NewReader("event: huge\ndata: " + payload + "\n\n"))
+	if err != nil {
+		t.Fatalf("parse failed for %d byte data line: %v", size, err)
+	}
+	if len(events) != 1 || events[0].Event != "huge" {
+		t.Fatalf("expected single huge event, got %d events", len(events))
+	}
+	if len(events[0].Data) != size {
+		t.Fatalf("data length = %d, want %d", len(events[0].Data), size)
+	}
+}
+
 func TestParseAllFlushesTrailingEventWithoutBlankLine(t *testing.T) {
 	events, err := ParseAll(strings.NewReader("event: done\ndata: ok"))
 	if err != nil {

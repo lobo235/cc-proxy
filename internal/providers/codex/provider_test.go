@@ -13,6 +13,7 @@ import (
 
 	"github.com/lobo235/cc-proxy/internal/authstore"
 	"github.com/lobo235/cc-proxy/internal/provider"
+	"github.com/lobo235/cc-proxy/internal/providers/codex/translate"
 )
 
 func TestProviderCountTokensUsesTranslatorCounter(t *testing.T) {
@@ -434,6 +435,126 @@ func TestProviderMessagesReturnsUpstreamErrorWithSnippet(t *testing.T) {
 	}
 }
 
+func TestTranslatedBodyBreakdownReportsBytesAndFingerprint(t *testing.T) {
+	p := Provider{}
+	_ = p
+	body := translateForBreakdown(t)
+	got := translatedBodyBreakdown(body)
+	if got.BodyBytes <= 0 {
+		t.Fatalf("body_bytes = %d, want positive", got.BodyBytes)
+	}
+	if got.InstructionsBytes <= 0 {
+		t.Fatalf("instructions_bytes = %d, want positive", got.InstructionsBytes)
+	}
+	if got.ToolsBytes <= 0 {
+		t.Fatalf("tools_bytes = %d, want positive", got.ToolsBytes)
+	}
+	if got.InputBytes <= 0 {
+		t.Fatalf("input_bytes = %d, want positive", got.InputBytes)
+	}
+	if len(got.PrefixFingerprint) != 12 {
+		t.Fatalf("fingerprint = %q, want 12 hex chars", got.PrefixFingerprint)
+	}
+	// Stability: second translation should produce identical fingerprint.
+	again := translatedBodyBreakdown(translateForBreakdown(t))
+	if again.PrefixFingerprint != got.PrefixFingerprint {
+		t.Fatalf("fingerprint drift: %q vs %q", got.PrefixFingerprint, again.PrefixFingerprint)
+	}
+}
+
+func TestStreamSalvageEmitsErrorWhenUpstreamFailsBeforeEvents(t *testing.T) {
+	var sink bytes.Buffer
+	err := salvageStreamFailure(&sink, "req_xyz", "gpt-5.5", io.ErrUnexpectedEOF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := sink.String()
+	for _, want := range []string{
+		"event: message_start",
+		`"role":"assistant"`,
+		"event: error",
+		"stream_error",
+		"event: message_stop",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("salvage stream missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestProviderMessagesDoesNotReturnErrorAfterStreamStarts(t *testing.T) {
+	home := t.TempDir()
+	store := authstore.New(map[string]string{}, home)
+	if err := store.Save(authstore.ProviderCodex, authstore.Record{Access: "access", Refresh: "refresh", Expires: 1}); err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = w.Write([]byte("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{}}}\n\n"))
+	}))
+	defer upstream.Close()
+	p := Provider{Client: Client{BaseURL: upstream.URL, AuthStore: store}}
+	out := &failingStreamOut{}
+	err := p.Messages(context.Background(), provider.MessagesCall{
+		Request: provider.AnthropicMessagesRequest{
+			Model:  "gpt-5.5",
+			Stream: boolPtr(true),
+			Raw:    json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hello"}],"stream":true}`),
+		},
+		Route: provider.Route{IncomingModel: "gpt-5.5", UpstreamModel: "gpt-5.5"},
+		Meta:  provider.CallMeta{RequestID: "req_stream_fail", SessionID: "sess-1"},
+	}, out)
+	if err != nil {
+		t.Fatalf("Messages returned error after stream was started: %v", err)
+	}
+	if out.status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", out.status)
+	}
+}
+
+func TestStreamSalvageIsNoopWhenStreamAlreadyProducedBytes(t *testing.T) {
+	var sink bytes.Buffer
+	cw := &countingWriter{w: &sink}
+	_, _ = io.WriteString(cw, "event: message_start\ndata: {}\n\n")
+	pre := sink.Len()
+	if err := salvageStreamIfNeeded(cw, "req_xyz", "gpt-5.5", io.ErrUnexpectedEOF); err != nil {
+		t.Fatal(err)
+	}
+	if sink.Len() != pre {
+		t.Fatalf("salvage should be a no-op once bytes were written; before=%d after=%d", pre, sink.Len())
+	}
+}
+
+func TestCachedPctOfHandlesZero(t *testing.T) {
+	if pct := cachedPctOf(translate.Usage{}); pct != 0 {
+		t.Fatalf("cachedPctOf zero = %v, want 0", pct)
+	}
+	var usage translate.Usage
+	if err := json.Unmarshal([]byte(`{"input_tokens":1000,"input_tokens_details":{"cached_tokens":750}}`), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if pct := cachedPctOf(usage); pct != 75 {
+		t.Fatalf("cachedPctOf 750/1000 = %v, want 75", pct)
+	}
+}
+
+func translateForBreakdown(t *testing.T) translate.ResponsesRequest {
+	t.Helper()
+	body, err := translate.Translate(provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw: json.RawMessage(`{
+			"model":"gpt-5.5",
+			"system":"be concise",
+			"tools":[{"name":"Read","description":"read","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}}],
+			"messages":[{"role":"user","content":"hello"}]
+		}`),
+	}, translate.Options{SessionID: "sess", Model: "gpt-5.5"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 type recordingOut struct {
 	status int
 	header http.Header
@@ -450,4 +571,27 @@ func (o *recordingOut) WriteJSON(status int, header http.Header, body any) error
 	o.status = status
 	o.header = header
 	return json.NewEncoder(&o.body).Encode(body)
+}
+
+type failingStreamOut struct {
+	status int
+	header http.Header
+}
+
+func (o *failingStreamOut) StartStream(status int, header http.Header) (io.Writer, error) {
+	o.status = status
+	o.header = header
+	return failingWriter{}, nil
+}
+
+func (o *failingStreamOut) WriteJSON(status int, header http.Header, body any) error {
+	o.status = status
+	o.header = header
+	return nil
+}
+
+type failingWriter struct{}
+
+func (failingWriter) Write([]byte) (int, error) {
+	return 0, io.ErrClosedPipe
 }

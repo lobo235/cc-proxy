@@ -21,7 +21,9 @@ preserving the value of the Claude Code harness:
 The current implementation is intentionally stateless toward Codex:
 
 - `store` is always `false`.
-- `prompt_cache_key` is set from the Claude Code session id.
+- `prompt_cache_key` defaults to the Claude Code session id.
+- `CCP_CODEX_CACHE_KEY_STRATEGY=stable` can opt into a per-model stable cache
+  key for cross-process `claude-gpt -p` experiments.
 - `previous_response_id` / stored Responses API mode is not available.
 - The Codex backend rejected `store:true` with:
   `{"detail":"Store must be set to false"}`.

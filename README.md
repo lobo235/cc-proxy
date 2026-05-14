@@ -162,6 +162,20 @@ turn. The Codex backend currently rejects stored Responses API requests with
 `Store must be set to false`, so `cc-proxy` does not expose a
 `previous_response_id`/stored-response mode.
 
+By default, the Codex `prompt_cache_key` is the Claude Code session id. Set
+`CCP_CODEX_CACHE_KEY_STRATEGY=stable` to derive the cache key from the upstream
+model instead, which lets repeated fresh `claude-gpt -p` invocations share a
+backend cache shard when their prefix bytes match:
+
+```bash
+CCP_LOG_VERBOSE=1 CCP_CODEX_CACHE_KEY_STRATEGY=stable scripts/cc-proxy-ensure restart
+```
+
+For launcher-driven startup, `CLAUDE_GPT_CACHE_KEY_STRATEGY=stable` passes the
+same setting through when `scripts/claude-gpt` starts a stopped proxy. If the
+proxy is already running, restart it with the `CCP_CODEX_CACHE_KEY_STRATEGY`
+environment variable so the running process picks up the strategy.
+
 `/v1/messages/count_tokens` attempts the Codex input-token endpoint derived from
 the configured responses URL by appending `/input_tokens`. Override it with
 `CCP_CODEX_INPUT_TOKENS_URL` if the backend exposes token counting at a

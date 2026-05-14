@@ -62,6 +62,34 @@ func TestLoadEnvOverridesConfig(t *testing.T) {
 	}
 }
 
+func TestLoadCodexCacheKeyStrategyFromEnv(t *testing.T) {
+	cfg, err := Load(LoadOptions{
+		Env:        map[string]string{"CCP_CODEX_CACHE_KEY_STRATEGY": "stable"},
+		ConfigPath: filepath.Join(t.TempDir(), "missing.json"),
+		Stderr:     &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Codex.CacheKeyStrategy != "stable" {
+		t.Fatalf("CacheKeyStrategy = %q, want stable", cfg.Codex.CacheKeyStrategy)
+	}
+}
+
+func TestLoadCodexCacheKeyStrategyDefaultsEmpty(t *testing.T) {
+	cfg, err := Load(LoadOptions{
+		Env:        map[string]string{},
+		ConfigPath: filepath.Join(t.TempDir(), "missing.json"),
+		Stderr:     &bytes.Buffer{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Codex.CacheKeyStrategy != "" {
+		t.Fatalf("CacheKeyStrategy = %q, want empty default", cfg.Codex.CacheKeyStrategy)
+	}
+}
+
 func TestLoadInvalidPort(t *testing.T) {
 	_, err := Load(LoadOptions{
 		Env:        map[string]string{"PORT": "nope"},

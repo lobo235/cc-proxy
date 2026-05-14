@@ -2,10 +2,13 @@ package codex
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"regexp"
 	"strings"
@@ -23,6 +26,7 @@ type Provider struct {
 	Effort                  string
 	CompactionEffort        string
 	DisabledSkillToolSkills []string
+	CacheKeyStrategy        translate.CacheKeyStrategy
 	Logger                  *slog.Logger
 	Verbose                 bool
 }
@@ -55,11 +59,13 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 		Model:                   call.Route.UpstreamModel,
 		Effort:                  effort,
 		DisabledSkillToolSkills: p.DisabledSkillToolSkills,
+		CacheKeyStrategy:        p.CacheKeyStrategy,
 	})
 	if err != nil {
 		return err
 	}
 	if p.Verbose {
+		breakdown := translatedBodyBreakdown(body)
 		log.Debug("codex request translated",
 			"request_id", call.Meta.RequestID,
 			"model", body.Model,
@@ -69,6 +75,12 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 			"service_tier", body.ServiceTier,
 			"reasoning_effort", reasoningEffort(body.Reasoning),
 			"include_reasoning", containsString(body.Include, "reasoning.encrypted_content"),
+			"body_bytes", breakdown.BodyBytes,
+			"instructions_bytes", breakdown.InstructionsBytes,
+			"tools_bytes", breakdown.ToolsBytes,
+			"input_bytes", breakdown.InputBytes,
+			"prefix_fingerprint", breakdown.PrefixFingerprint,
+			"cache_key_strategy", p.cacheKeyStrategyLabel(),
 		)
 	}
 	start := time.Now()
@@ -111,6 +123,7 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 				"request_id", call.Meta.RequestID,
 				"input_tokens", usage.InputTokens,
 				"cached_input_tokens", usage.InputTokensDetails.CachedTokens,
+				"cached_pct", cachedPctOf(usage),
 				"output_tokens", usage.OutputTokens,
 				"reasoning_tokens", usage.OutputTokensDetails.ReasoningTokens,
 				"total_tokens", usage.TotalTokens,
@@ -127,9 +140,11 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 	if err != nil {
 		return err
 	}
+	streamStart := time.Now()
+	counting := &countingWriter{w: writer}
 	var usage translate.Usage
 	hasUsage := false
-	err = translate.TranslateStream(resp.Body, writer, translate.StreamOptions{
+	err = translate.TranslateStream(resp.Body, counting, translate.StreamOptions{
 		MessageID: "msg_" + call.Meta.RequestID,
 		Model:     call.Route.UpstreamModel,
 		OnUsage: func(u translate.Usage) {
@@ -137,11 +152,31 @@ func (p *Provider) Messages(ctx context.Context, call provider.MessagesCall, out
 			hasUsage = true
 		},
 	})
+	if err != nil {
+		log.Warn("codex stream translation failed",
+			"request_id", call.Meta.RequestID,
+			"duration_ms", time.Since(streamStart).Milliseconds(),
+			"bytes_emitted", counting.bytes,
+			"error", err.Error(),
+		)
+		// If we already wrote some events the client can recover by treating
+		// the stream as truncated; if we wrote nothing, salvage with a
+		// message_start + error + message_stop sequence so Claude Code shows
+		// a real error instead of "Stream ended without receiving any events".
+		if salvageErr := salvageStreamIfNeeded(counting, call.Meta.RequestID, call.Route.UpstreamModel, err); salvageErr != nil {
+			log.Warn("codex stream salvage failed",
+				"request_id", call.Meta.RequestID,
+				"error", salvageErr.Error(),
+			)
+		}
+		return nil
+	}
 	if hasUsage {
 		log.Info("codex usage",
 			"request_id", call.Meta.RequestID,
 			"input_tokens", usage.InputTokens,
 			"cached_input_tokens", usage.InputTokensDetails.CachedTokens,
+			"cached_pct", cachedPctOf(usage),
 			"output_tokens", usage.OutputTokens,
 			"reasoning_tokens", usage.OutputTokensDetails.ReasoningTokens,
 			"total_tokens", usage.TotalTokens,
@@ -212,6 +247,129 @@ func reasoningEffort(r *translate.Reasoning) string {
 		return ""
 	}
 	return r.Effort
+}
+
+// translatedBody captures the post-translation request shape we expose in
+// verbose logs so prefix stability and request bloat are measurable across
+// turns without reading the full request body.
+type translatedBody struct {
+	BodyBytes         int
+	InstructionsBytes int
+	ToolsBytes        int
+	InputBytes        int
+	PrefixFingerprint string
+}
+
+func translatedBodyBreakdown(body translate.ResponsesRequest) translatedBody {
+	out := translatedBody{InstructionsBytes: len(body.Instructions)}
+	if encoded, err := json.Marshal(body); err == nil {
+		out.BodyBytes = len(encoded)
+	}
+	toolsJSON, _ := json.Marshal(body.Tools)
+	out.ToolsBytes = len(toolsJSON)
+	inputJSON, _ := json.Marshal(body.Input)
+	out.InputBytes = len(inputJSON)
+	// Fingerprint covers the cache-relevant prefix (instructions + tool list).
+	// Same prefix turn-over-turn means the model side can hit its prompt cache.
+	sum := sha256.New()
+	sum.Write([]byte(body.Instructions))
+	sum.Write([]byte{0})
+	sum.Write(toolsJSON)
+	out.PrefixFingerprint = hex.EncodeToString(sum.Sum(nil))[:12]
+	return out
+}
+
+func (p Provider) cacheKeyStrategyLabel() string {
+	if p.CacheKeyStrategy == "" {
+		return string(translate.CacheKeyStrategySession)
+	}
+	return string(p.CacheKeyStrategy)
+}
+
+// countingWriter forwards writes to w while tracking the total byte count so we
+// can tell, after a stream failure, whether the client already saw any events.
+type countingWriter struct {
+	w     io.Writer
+	bytes int
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.bytes += n
+	return n, err
+}
+
+// salvageStreamIfNeeded writes a minimal Anthropic-shaped error stream when the
+// underlying writer has not produced any bytes yet, so Claude Code receives a
+// readable failure event instead of a silent "Stream ended without receiving
+// any events" message.
+func salvageStreamIfNeeded(w *countingWriter, requestID, model string, cause error) error {
+	if w.bytes > 0 {
+		return nil
+	}
+	return salvageStreamFailure(w, requestID, model, cause)
+}
+
+func salvageStreamFailure(w io.Writer, requestID, model string, cause error) error {
+	messageID := "msg_" + requestID
+	start, err := sseEncode("message_start", map[string]any{
+		"type": "message_start",
+		"message": map[string]any{
+			"id":            messageID,
+			"type":          "message",
+			"role":          "assistant",
+			"model":         model,
+			"content":       []any{},
+			"stop_reason":   nil,
+			"stop_sequence": nil,
+			"usage": map[string]int{
+				"input_tokens":                0,
+				"output_tokens":               0,
+				"cache_creation_input_tokens": 0,
+				"cache_read_input_tokens":     0,
+			},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	message := "Upstream stream ended before any events"
+	if cause != nil {
+		message = message + ": " + cause.Error()
+	}
+	errEvent, err := sseEncode("error", map[string]any{
+		"type": "error",
+		"error": map[string]string{
+			"type":    "stream_error",
+			"message": message,
+		},
+	})
+	if err != nil {
+		return err
+	}
+	stop, err := sseEncode("message_stop", map[string]string{"type": "message_stop"})
+	if err != nil {
+		return err
+	}
+	if _, err := io.WriteString(w, start+errEvent+stop); err != nil {
+		return err
+	}
+	return nil
+}
+
+func sseEncode(event string, payload any) (string, error) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return "", err
+	}
+	return "event: " + event + "\ndata: " + string(data) + "\n\n", nil
+}
+
+func cachedPctOf(usage translate.Usage) float64 {
+	if usage.InputTokens <= 0 {
+		return 0
+	}
+	return math.Round(float64(usage.InputTokensDetails.CachedTokens)/float64(usage.InputTokens)*1000) / 10
 }
 
 func readBodySnippet(r io.Reader, limit int64) string {

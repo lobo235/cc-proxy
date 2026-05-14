@@ -120,6 +120,10 @@ Important config:
 - `CCP_CODEX_EFFORT` / `codex.effort`: force Codex reasoning effort.
   Accepted values are `none`, `minimal`, `low`, `medium`, `high`, `xhigh`,
   and Claude-facing alias `max`.
+- `CCP_CODEX_CACHE_KEY_STRATEGY` / `codex.cacheKeyStrategy`: `session`
+  (default) uses the Claude Code session id as the Codex `prompt_cache_key`;
+  `stable` derives a per-model key so repeated fresh invocations can share a
+  backend cache shard when their prefix bytes match.
 - `CCP_CODEX_SERVICE_TIER` / `codex.serviceTier`: `fast`, `priority`, or
   `flex`; `fast` maps to `priority`.
 - `CCP_CODEX_BASE_URL` / `codex.baseUrl`: Codex endpoint override.

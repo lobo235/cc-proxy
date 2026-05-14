@@ -330,6 +330,107 @@ func TestTranslateRejectsInvalidEffort(t *testing.T) {
 	}
 }
 
+func TestTranslateCacheKeyDefaultsToSessionID(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	got, err := Translate(req, Options{SessionID: "sess-abc"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PromptCacheKey != "sess-abc" {
+		t.Fatalf("PromptCacheKey = %q, want session id", got.PromptCacheKey)
+	}
+}
+
+func TestTranslateStableCacheKeyIsConstantAcrossSessions(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	a, err := Translate(req, Options{SessionID: "sess-aaa", Model: "gpt-5.5", CacheKeyStrategy: CacheKeyStrategyStable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Translate(req, Options{SessionID: "sess-zzz", Model: "gpt-5.5", CacheKeyStrategy: CacheKeyStrategyStable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.PromptCacheKey == "" {
+		t.Fatal("stable PromptCacheKey is empty")
+	}
+	if a.PromptCacheKey != b.PromptCacheKey {
+		t.Fatalf("stable key not stable: %q vs %q", a.PromptCacheKey, b.PromptCacheKey)
+	}
+	if a.PromptCacheKey == "sess-aaa" {
+		t.Fatal("stable key should not equal session id")
+	}
+}
+
+func TestTranslateStableCacheKeyDiffersByModel(t *testing.T) {
+	req := provider.AnthropicMessagesRequest{
+		Model: "gpt-5.5",
+		Raw:   json.RawMessage(`{"model":"gpt-5.5","messages":[{"role":"user","content":"hi"}]}`),
+	}
+	a, err := Translate(req, Options{SessionID: "s", Model: "gpt-5.5", CacheKeyStrategy: CacheKeyStrategyStable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Translate(req, Options{SessionID: "s", Model: "gpt-5.4", CacheKeyStrategy: CacheKeyStrategyStable})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.PromptCacheKey == b.PromptCacheKey {
+		t.Fatalf("expected different stable keys per model, both = %q", a.PromptCacheKey)
+	}
+}
+
+func TestTranslatePrefixIsByteStableAcrossInvocations(t *testing.T) {
+	raw := json.RawMessage(`{
+		"model":"gpt-5.5",
+		"system":[{"type":"text","text":"alpha"},{"type":"text","text":"beta"}],
+		"tools":[
+			{"name":"Read","description":"read file","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}},
+			{"name":"Skill","description":"run skill","input_schema":{"type":"object","properties":{"skill":{"type":"string"}}}}
+		],
+		"messages":[{"role":"user","content":"hi"}]
+	}`)
+	mkReq := func() provider.AnthropicMessagesRequest {
+		// copy raw to avoid any aliasing surprises across translate calls
+		buf := make(json.RawMessage, len(raw))
+		copy(buf, raw)
+		return provider.AnthropicMessagesRequest{Model: "gpt-5.5", Raw: buf}
+	}
+	opts := Options{
+		SessionID:               "sess-xyz",
+		Model:                   "gpt-5.5",
+		DisabledSkillToolSkills: []string{"domain-model", "ubiquitous-language"},
+	}
+	a, err := Translate(mkReq(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := Translate(mkReq(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Instructions != b.Instructions {
+		t.Fatalf("instructions drifted between calls:\n  a=%q\n  b=%q", a.Instructions, b.Instructions)
+	}
+	aTools, err := json.Marshal(a.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bTools, err := json.Marshal(b.Tools)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(aTools) != string(bTools) {
+		t.Fatalf("tools JSON drifted between calls:\n  a=%s\n  b=%s", aTools, bTools)
+	}
+}
+
 func TestCountTokensIncludesTextToolsAndImages(t *testing.T) {
 	req := provider.AnthropicMessagesRequest{
 		Model: "gpt-5.4",

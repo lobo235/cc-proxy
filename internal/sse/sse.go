@@ -30,9 +30,16 @@ func ParseAll(r io.Reader) ([]Event, error) {
 	return events, err
 }
 
+// MaxLineBytes caps the size of a single SSE field line. Codex can emit very
+// large data: lines (e.g. encrypted reasoning content or a tool call with a
+// large arguments blob). Hitting the cap manifests upstream as a silent
+// "stream ended without receiving any events" because no events have been
+// emitted yet — generous headroom is cheap and prevents that failure mode.
+const MaxLineBytes = 32 * 1024 * 1024
+
 func Parse(r io.Reader, handle func(Event) error) error {
 	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	scanner.Buffer(make([]byte, 0, 64*1024), MaxLineBytes)
 	var event string
 	var data []string
 	flush := func() error {

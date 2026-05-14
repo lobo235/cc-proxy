@@ -18,6 +18,7 @@ import (
 	"github.com/lobo235/cc-proxy/internal/provider"
 	codexprovider "github.com/lobo235/cc-proxy/internal/providers/codex"
 	codexauth "github.com/lobo235/cc-proxy/internal/providers/codex/auth"
+	codextranslate "github.com/lobo235/cc-proxy/internal/providers/codex/translate"
 	"github.com/lobo235/cc-proxy/internal/server"
 )
 
@@ -75,6 +76,7 @@ func serve() error {
 			Effort:                  cfg.Codex.Effort,
 			CompactionEffort:        cfg.Codex.CompactionEffort,
 			DisabledSkillToolSkills: cfg.SkillToolDisabledSkills,
+			CacheKeyStrategy:        codextranslate.ParseCacheKeyStrategy(cfg.Codex.CacheKeyStrategy),
 			Logger:                  log,
 			Verbose:                 cfg.Log.Verbose,
 		},

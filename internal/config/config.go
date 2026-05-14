@@ -37,6 +37,11 @@ type CodexConfig struct {
 	ServiceTier      string `json:"serviceTier,omitempty"`
 	BaseURL          string `json:"baseUrl,omitempty"`
 	InputTokensURL   string `json:"inputTokensUrl,omitempty"`
+	// CacheKeyStrategy controls how the `prompt_cache_key` Codex receives is
+	// derived. Empty or "session" preserves the legacy per-session behavior;
+	// "stable" routes one-shot invocations of the same model to a shared cache
+	// shard so the first turn often warms instead of cold-loading.
+	CacheKeyStrategy string `json:"cacheKeyStrategy,omitempty"`
 }
 
 type KimiConfig struct {
@@ -122,6 +127,7 @@ func Load(opts LoadOptions) (Config, error) {
 	cfg.Codex.ServiceTier = firstNonEmpty(env["CCP_CODEX_SERVICE_TIER"], cfg.Codex.ServiceTier)
 	cfg.Codex.BaseURL = firstSet(env["CCP_CODEX_BASE_URL"], cfg.Codex.BaseURL)
 	cfg.Codex.InputTokensURL = firstSet(env["CCP_CODEX_INPUT_TOKENS_URL"], cfg.Codex.InputTokensURL)
+	cfg.Codex.CacheKeyStrategy = firstNonEmpty(env["CCP_CODEX_CACHE_KEY_STRATEGY"], cfg.Codex.CacheKeyStrategy)
 
 	cfg.Kimi.UserAgent = firstSet(env["CCP_KIMI_USER_AGENT"], env["CCP_USER_AGENT"], cfg.Kimi.UserAgent)
 	cfg.Kimi.OAuthHost = firstSet(env["CCP_KIMI_OAUTH_HOST"], cfg.Kimi.OAuthHost)

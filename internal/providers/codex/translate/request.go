@@ -1,6 +1,8 @@
 package translate
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
@@ -10,12 +12,41 @@ import (
 	"github.com/lobo235/cc-proxy/internal/provider"
 )
 
+// CacheKeyStrategy selects how the Codex `prompt_cache_key` is derived for a
+// translated request. The key is a routing hint: identical keys tell the
+// backend to prefer the same shard so a previously-loaded prefix can be reused.
+type CacheKeyStrategy string
+
+const (
+	// CacheKeyStrategySession (default) sets prompt_cache_key to the Claude
+	// Code session id. Each `claude` invocation gets a fresh session, so the
+	// first turn pays a cold cache.
+	CacheKeyStrategySession CacheKeyStrategy = "session"
+	// CacheKeyStrategyStable derives a key from the upstream provider/model so
+	// repeated one-shot invocations on the same host share a cache shard. The
+	// model still validates by prefix bytes, so a mismatched prefix simply
+	// behaves as cold cache — no correctness impact.
+	CacheKeyStrategyStable CacheKeyStrategy = "stable"
+)
+
+// ParseCacheKeyStrategy normalizes a raw config string. Unknown values fall
+// back to session so a typo can never break translation.
+func ParseCacheKeyStrategy(raw string) CacheKeyStrategy {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case string(CacheKeyStrategyStable):
+		return CacheKeyStrategyStable
+	default:
+		return CacheKeyStrategySession
+	}
+}
+
 type Options struct {
 	SessionID               string
 	ServiceTier             string
 	Model                   string
 	Effort                  string
 	DisabledSkillToolSkills []string
+	CacheKeyStrategy        CacheKeyStrategy
 }
 
 type ResponsesRequest struct {
@@ -202,16 +233,24 @@ func Translate(req provider.AnthropicMessagesRequest, opts Options) (ResponsesRe
 			out.Instructions = appendClaudeCodeFileToolCompatibility(out.Instructions)
 		}
 	}
-	if opts.SessionID != "" {
-		out.PromptCacheKey = opts.SessionID
-	}
 	if opts.Model != "" {
 		out.Model = opts.Model
 	}
 	if opts.ServiceTier != "" {
 		out.ServiceTier = opts.ServiceTier
 	}
+	out.PromptCacheKey = deriveCacheKey(opts, out.Model)
 	return out, nil
+}
+
+func deriveCacheKey(opts Options, model string) string {
+	switch opts.CacheKeyStrategy {
+	case CacheKeyStrategyStable:
+		sum := sha256.Sum256([]byte("cc-proxy:codex:" + model))
+		return "ccp-codex-" + hex.EncodeToString(sum[:])[:24]
+	default:
+		return opts.SessionID
+	}
 }
 
 func appendClaudeCodeFileToolCompatibility(instructions string) string {
